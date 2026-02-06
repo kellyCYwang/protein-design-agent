@@ -1,0 +1,955 @@
+#!/usr/bin/env python3
+"""
+Refactored Enzyme Design Agent
+Integrates the new architecture with skills layer and early termination
+"""
+
+import os
+import sys
+import json
+import queue
+import threading
+from pathlib import Path
+from typing import List, Dict, Optional, Any, TypedDict, Annotated, Union, Literal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# LangChain / LangGraph Imports
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+
+# Add parent to path for importing mcp_servers
+sys.path.append(str(Path(__file__).parent.parent))
+from mcp_servers.ec.server import ECMCPServer, get_tools as get_ec_tools
+from mcp_servers.biorxiv.server import BiorxivMCPServer, get_tools as get_biorxiv_tools
+from mcp_servers.uniprot.server import UniProtMCPServer, get_tools as get_uniprot_tools
+from mcp_servers.pdb.server import PdbMCPServer, get_tools as get_pdb_tools
+
+# Import the new skill system
+from agent.skills.skill_system_new import SkillMiddleware, DetailedEnzymeAnalysisSkill, Skill
+
+# Load environment variables
+load_dotenv()
+
+# Define Agent State
+class AgentState(TypedDict):
+    """Complete state definition for the enzyme design agent."""
+    
+    # Core conversation
+    messages: Annotated[List[BaseMessage], add_messages]
+    question: str
+    query_type: Literal["simple", "moderate", "complex"]
+    
+    # Tool Results
+    tool_results: Dict[str, Any] | None
+    biorxiv_results: List[Dict[str, Any]] | None
+    retrieved_docs: List[Dict]
+    
+    # Skills
+    selected_skills: List[str]
+    skill_inputs: Dict[str, Dict[str, Any]]
+    skill_results: Dict[str, Any]
+    
+    # RAG
+    rag_results: Dict[str, Any] | None
+    
+    # Control Flags
+    is_complete: bool
+    needs_retrieval: bool
+    next_steps: List[str]
+    
+    # Output
+    final_answer: str
+    sources: List[str]
+    uniprot_hits: List[Dict]
+    pdb_hits: List[Dict]
+
+class TokenQueueHandler(BaseCallbackHandler):
+    """Callback handler that puts new tokens into a queue."""
+    
+    def __init__(self, token_queue: queue.Queue):
+        self.token_queue = token_queue
+        
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.token_queue.put(token)
+
+class ProteinDesignAgent:
+    """Agent that combines RAG with Zenmux LLM for protein engineering queries"""
+    
+    def __init__(self, rag_instance, model: str = "google/gemini-2.5-flash-lite"):
+        """
+        Initialize the RAG agent
+        
+        Args:
+            rag_instance: Your LocalPDFRAG instance
+            model: Zenmux model to use
+        """
+        self.rag = rag_instance
+        self.model = model
+        
+        # Initialize OpenAI client for Zenmux (Legacy client for backward compat if needed, but we use LangChain now)
+        api_key = os.getenv("ZENMUX_API_KEY")
+        base_url = os.getenv("ZENMUX_BASE_URL", "https://api.zenmux.com/v1")
+        
+        if not api_key:
+            raise ValueError("ZENMUX_API_KEY not found in environment")
+        
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
+        
+        # Initialize LangChain Chat Model
+        self.llm = ChatOpenAI(
+            model=model,
+            openai_api_key=api_key,
+            openai_api_base=base_url,
+            temperature=0.3
+        )
+        
+        # Initialize MCP Servers
+        self.ec_server = ECMCPServer()
+        self.biorxiv_server = BiorxivMCPServer()
+        self.uniprot_server = UniProtMCPServer()
+        self.pdb_server = PdbMCPServer()
+        
+        # Initialize Tools (Bind to LLM)
+        self.tools_map = {
+            "lookup_ec_number": self.ec_server.lookup_ec_number,
+            "get_ec_number_by_name": self.ec_server.get_ec_number_by_name,
+            "get_enzyme_class_info": self.ec_server.get_enzyme_class_info,
+            "search_enzyme_papers": self.biorxiv_server.integrated_search,
+            "get_paper_details": self.biorxiv_server.get_paper_details,
+            "search_uniprot": self.uniprot_server.search_proteins,
+            "get_uniprot_protein": self.uniprot_server.get_protein_by_id,
+            "search_uniprot_by_ec": self.uniprot_server.search_by_ec_number,
+            "find_thermophilic_homologs": self.uniprot_server.find_thermophilic_homologs,
+            "get_pdb_entry": self.pdb_server.get_pdb_entry,
+            "search_pdb": self.pdb_server.search_structure
+        }
+        
+        # Initialize Skill Middleware
+        self.skill_middleware = SkillMiddleware()
+        self.skill_middleware.register_skill(DetailedEnzymeAnalysisSkill())
+        
+        # Define tools for LangChain
+        self.tool_schemas = self._get_tools_schemas()
+        self.llm_with_tools = self.llm.bind_tools(self.tool_schemas)
+        
+        # Initialize Memory
+        self.memory = MemorySaver()
+        
+        # Build Graph
+        self.graph = self._build_graph()
+    
+    def _build_graph(self):
+        """Build the LangGraph workflow with early termination logic"""
+        workflow = StateGraph(AgentState)
+        
+        # Add nodes
+        workflow.add_node("router", self._router_node)
+        workflow.add_node("tools_agent", self._tools_agent_node)
+        workflow.add_node("biorxiv_search", self._biorxiv_search_node)
+        workflow.add_node("retrieve", self._retrieve_node)
+        workflow.add_node("skill_selector", self._skill_selector_node)
+        workflow.add_node("skill_executor", self._skill_executor_node)
+        workflow.add_node("rag_agent", self._rag_agent_node)
+        workflow.add_node("synthesizer", self._synthesizer_node)
+        
+        # Add edges with early termination logic
+        workflow.add_edge(START, "router")
+        workflow.add_edge("router", "tools_agent")
+        
+        # Conditional edges based on query complexity
+        workflow.add_conditional_edges(
+            "tools_agent",
+            self._should_continue_after_tools,
+            {
+                "END": END,
+                "biorxiv": "biorxiv_search",
+                "skills": "skill_selector",
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "biorxiv_search",
+            self._should_continue_after_biorxiv,
+            {
+                "END": END,
+                "retrieve": "retrieve",
+                "skills": "skill_selector",
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "retrieve",
+            self._should_continue_after_retrieve,
+            {
+                "skills": "skill_selector",
+                "synthesize": "synthesizer",
+            }
+        )
+        
+        workflow.add_edge("skill_selector", "skill_executor")
+        
+        workflow.add_conditional_edges(
+            "skill_executor",
+            self._should_continue_after_skills,
+            {
+                "more_skills": "skill_executor",
+                "rag": "rag_agent",
+                "synthesize": "synthesizer",
+            }
+        )
+        
+        workflow.add_edge("rag_agent", "synthesizer")
+        workflow.add_edge("synthesizer", END)
+        
+        return workflow.compile(checkpointer=self.memory)
+
+    def clear_memory(self):
+        """Clear conversation history (reset memory)"""
+        # With Checkpointer, we can't easily 'clear' a thread without just using a new thread_id
+        # But for this simple agent, we can re-init the memory or provide a new thread_id in query
+        self.memory = MemorySaver()
+        self.graph = self._build_graph()
+        
+    # Manual history methods removed in favor of LangGraph memory
+
+    def _get_tools_schemas(self) -> List[Dict]:
+        """Return all available tools"""
+        tools = []
+        
+        # Add EC tools (imported from server.py to avoid redundancy)
+        ec_tools = get_ec_tools()
+        for tool in ec_tools:
+            # OpenAI expects 'parameters' but MCP uses 'input_schema'
+            # We need to adapt the tool definition
+            tool_def = tool.copy()
+            if "input_schema" in tool_def:
+                tool_def["parameters"] = tool_def.pop("input_schema")
+            
+            tools.append({
+                "type": "function",
+                "function": tool_def
+            })
+            
+        # Add bioRxiv tools
+        biorxiv_tools = get_biorxiv_tools()
+        for tool in biorxiv_tools:
+            tool_def = tool.copy()
+            if "input_schema" in tool_def:
+                tool_def["parameters"] = tool_def.pop("input_schema")
+            
+            tools.append({
+                "type": "function",
+                "function": tool_def
+            })
+            
+        # Add UniProt tools
+        uniprot_tools = get_uniprot_tools()
+        for tool in uniprot_tools:
+            tool_def = tool.copy()
+            if "input_schema" in tool_def:
+                tool_def["parameters"] = tool_def.pop("input_schema")
+            
+            tools.append({
+                "type": "function",
+                "function": tool_def
+            })
+            
+        # Add PDB tools
+        pdb_tools = get_pdb_tools()
+        for tool in pdb_tools:
+            tool_def = tool.copy()
+            if "input_schema" in tool_def:
+                tool_def["parameters"] = tool_def.pop("input_schema")
+            
+            tools.append({
+                "type": "function",
+                "function": tool_def
+            })
+            
+        return tools
+
+    def _execute_tool_safe(self, tool_name: str, tool_args: Dict, tool_id: str) -> tuple:
+        """Helper for parallel execution that returns (id, name, result)"""
+        # Strip 'default_api.' prefix if present
+        if tool_name.startswith("default_api."):
+            tool_name = tool_name.replace("default_api.", "")
+            
+        print(f"  🔧 Tool Call: {tool_name} {tool_args}")
+        try:
+            func = self.tools_map.get(tool_name)
+            if func:
+                result = func(**tool_args)
+            else:
+                result = {"error": f"Unknown tool: {tool_name}"}
+            
+            # Truncate result for logging
+            print(f"  ✅ Tool Result ({tool_name}): {str(result)[:100]}...")
+            return (tool_id, tool_name, result)
+        except Exception as e:
+            print(f"  ❌ Tool Error ({tool_name}): {e}")
+            return (tool_id, tool_name, {"error": f"Tool execution failed: {str(e)}"})
+
+    def _execute_tool(self, tool_name: str, tool_args: Dict) -> Any:
+        """Execute EC tools (Synchronous wrapper)"""
+        _, _, result = self._execute_tool_safe(tool_name, tool_args, "sync")
+        return result
+
+    # --- LangGraph Nodes ---
+
+    def _should_use_analysis_skill(self, question: str) -> bool:
+        """Check if the query requires detailed analysis skill using LLM"""
+        prompt = f"""You are a query classifier.
+        Does the following user query require a detailed, comprehensive analysis of an enzyme (including structure, mechanism, literature synthesis)?
+        
+        Query: "{question}"
+        
+        If the user is just asking for a simple fact (e.g. "display structure", "what is the EC number", "find sequence", "show me..."), answer NO.
+        If the user wants a full report, detailed breakdown, or comprehensive overview, answer YES.
+        
+        Answer only YES or NO.
+        """
+        try:
+            # Use the base LLM without tools
+            response = self.llm.invoke(prompt)
+            content = response.content.strip().upper()
+            return "YES" in content
+        except Exception as e:
+            print(f"Intent classification failed: {e}")
+            # Fallback to keyword search if LLM fails
+            intent_keywords = ["analyze", "analysis", "report", "detailed", "characterize", "overview", "summary", "comprehensive"]
+            return any(k in question.lower() for k in intent_keywords)
+
+    def _tools_agent_node(self, state: AgentState):
+        """Execute MCP tools for basic lookups with early termination."""
+        
+        # Get available tools
+        available_tools = list(self.tools_map.keys())
+        if not available_tools:
+            return {"tool_results": {}, "is_complete": False}
+        
+        # Create messages
+        messages = [
+            SystemMessage(content="You are an enzyme database assistant. Answer directly and concisely using available tools."),
+            HumanMessage(content=state["question"])
+        ]
+        
+        tool_results = {}
+        final_response = None
+        
+        # Execute tools (max 3 iterations)
+        for _ in range(3):
+            try:
+                response = self.llm_with_tools.invoke(messages)
+                messages.append(response)
+                
+                if not hasattr(response, 'tool_calls') or not response.tool_calls:
+                    final_response = response.content
+                    break
+                
+                # Execute tool calls
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call["name"]
+                    if tool_name in self.tools_map:
+                        try:
+                            result = self.tools_map[tool_name](**tool_call["args"])
+                            tool_results[tool_name] = result
+                            
+                            # Add tool result to messages
+                            messages.append(ToolMessage(
+                                tool_call_id=tool_call["id"],
+                                content=str(result),
+                                name=tool_name
+                            ))
+                        except Exception as e:
+                            print(f"Tool execution failed for {tool_name}: {e}")
+                            messages.append(ToolMessage(
+                                tool_call_id=tool_call["id"],
+                                content=f"Error: {str(e)}",
+                                name=tool_name
+                            ))
+                
+            except Exception as e:
+                print(f"LLM invocation failed: {e}")
+                break
+        
+        # For simple queries, format response immediately and mark as complete
+        is_complete = False
+        if state["query_type"] == "simple" and tool_results:
+            is_complete = True
+            if not final_response:
+                try:
+                    format_response = self.llm.invoke(
+                        f"Answer directly based on: {tool_results}\nQuery: {state['question']}"
+                    )
+                    final_response = format_response.content
+                except Exception as e:
+                    print(f"Response formatting failed: {e}")
+                    final_response = "I found some information but couldn't format it properly."
+        
+        return {
+            "tool_results": tool_results,
+            "final_answer": final_response or "",
+            "is_complete": is_complete,
+            "messages": [AIMessage(content=final_response)] if final_response else [],
+        }
+
+    def _check_tools_result(self, state: AgentState):
+        """Decide whether to go to RAG or End"""
+        last_msg = state["messages"][-1]
+        content = last_msg.content.lower() if isinstance(last_msg, AIMessage) else ""
+        
+        if any(trigger in content for trigger in [
+            "need more information", "check the literature", "cannot provide", 
+            "can only provide", "unable to", "don't know", "do not have"
+        ]):
+            return "rag"
+        return "end"
+
+    def _router_node(self, state: AgentState) -> Dict[str, Any]:
+        """Classify query complexity for routing."""
+        
+        classification_prompt = """Classify this enzyme-related query by complexity:
+
+SIMPLE - Direct lookups, single fact retrieval:
+- "What's the EC number for lipase?"
+- "Get PDB structure 1ABC"
+- "What enzyme has EC 3.1.1.3?"
+
+MODERATE - Requires some context or multiple lookups:
+- "Find papers about lipase engineering"
+- "What's known about TEM-1 mutations?"
+- "Compare EC 3.1.1.3 and EC 3.1.1.4"
+
+COMPLEX - Requires analysis, skills, synthesis:
+- "Design thermostable variants of lipase"
+- "Analyze the active site and suggest mutations"
+- "Plan a directed evolution campaign"
+
+Query: {query}
+
+Respond with only: SIMPLE, MODERATE, or COMPLEX"""
+        
+        try:
+            response = self.llm.invoke(
+                classification_prompt.format(query=state["question"])
+            )
+            query_type = response.content.strip().lower()
+            
+            # Validate query type
+            if query_type not in ["simple", "moderate", "complex"]:
+                query_type = "simple"
+                
+        except Exception as e:
+            print(f"Query classification failed: {e}")
+            query_type = "simple"
+        
+        return {"query_type": query_type}
+
+    def _should_continue_after_tools(self, state: AgentState) -> str:
+        """Determine next step after tools execution."""
+        if state.get("is_complete"):
+            return "END"
+        
+        query_type = state.get("query_type", "simple")
+        
+        if query_type == "simple":
+            return "END"
+        elif query_type == "moderate":
+            return "biorxiv"
+        else:  # complex
+            return "skills"
+
+    def _should_continue_after_biorxiv(self, state: AgentState) -> str:
+        """Determine next step after bioRxiv search."""
+        if state.get("is_complete"):
+            return "END"
+        
+        if state.get("query_type") == "moderate":
+            return "END"
+        
+        if state.get("needs_retrieval"):
+            return "retrieve"
+        
+        return "skills"
+
+    def _should_continue_after_retrieve(self, state: AgentState) -> str:
+        """Determine next step after retrieval."""
+        if state.get("query_type") == "complex":
+            return "skills"
+        return "synthesize"
+
+    def _should_continue_after_skills(self, state: AgentState) -> str:
+        """Determine next step after skill execution."""
+        if state.get("selected_skills"):
+            return "more_skills"
+        
+        skill_results = state.get("skill_results", {})
+        for result in skill_results.values():
+            if result.get("needs_more_rag"):
+                return "rag"
+        
+        return "synthesize"
+
+    def _skill_selector_node(self, state: AgentState) -> Dict[str, Any]:
+        """Select skills to execute."""
+        
+        skills_description = self.skill_middleware.get_all_skills_description()
+        
+        selector_prompt = """Select skills for this enzyme design query.
+
+Available Skills:
+{skills_description}
+
+Query: {query}
+Available context: {context}
+
+Return JSON:
+{{
+    "selected_skills": ["skill_name_1", "skill_name_2"],
+    "skill_inputs": {{
+        "skill_name_1": {{"input_param": "value"}}
+    }}
+}}"""
+        
+        try:
+            response = self.llm.invoke(
+                selector_prompt.format(
+                    skills_description=skills_description,
+                    query=state["question"],
+                    context=f"Tools: {state.get('tool_results')}, Literature: {state.get('biorxiv_results')}"
+                )
+            )
+            
+            try:
+                selection = json.loads(response.content)
+            except json.JSONDecodeError:
+                selection = {"selected_skills": [], "skill_inputs": {}}
+                
+        except Exception as e:
+            print(f"Skill selection failed: {e}")
+            selection = {"selected_skills": [], "skill_inputs": {}}
+        
+        return {
+            "selected_skills": selection.get("selected_skills", []),
+            "skill_inputs": selection.get("skill_inputs", {}),
+        }
+
+    def _skill_executor_node(self, state: AgentState) -> Dict[str, Any]:
+        """Execute selected skills."""
+        
+        selected_skills = state.get("selected_skills", [])
+        skill_inputs = state.get("skill_inputs", {})
+        skill_results = state.get("skill_results", {}) or {}
+        
+        context = f"Tools: {state.get('tool_results')}\nLiterature: {state.get('biorxiv_results')}"
+        
+        for skill_name in selected_skills:
+            if skill_name in skill_results:
+                continue
+            
+            # Get skill content and create a skill instance
+            skill_content = self.skill_middleware.get_skill_content(skill_name)
+            if skill_content:
+                # Create a temporary skill instance for execution
+                from agent.skills.skill_system_new import DetailedEnzymeAnalysisSkill
+                skill = DetailedEnzymeAnalysisSkill()
+                
+                inputs = skill_inputs.get(skill_name, {})
+                try:
+                    result = skill.execute(inputs, context)
+                    skill_results[skill_name] = result
+                except Exception as e:
+                    print(f"Skill execution failed for {skill_name}: {e}")
+                    skill_results[skill_name] = {"error": str(e)}
+        
+        remaining_skills = [s for s in selected_skills if s not in skill_results]
+        
+        return {
+            "skill_results": skill_results,
+            "selected_skills": remaining_skills,
+        }
+
+    def _synthesizer_node(self, state: AgentState) -> Dict[str, Any]:
+        """Synthesize final response."""
+        
+        skill_results_formatted = ""
+        for name, result in (state.get("skill_results") or {}).items():
+            skill_results_formatted += f"\n### {name}\n{result.get('analysis', result)}\n"
+        
+        synthesis_prompt = """Synthesize a comprehensive enzyme design response.
+
+Query: {query}
+Database Results: {tools}
+Literature: {literature}
+Skill Analyses: {skills}
+
+Create a well-structured, actionable response."""
+        
+        try:
+            response = self.llm.invoke(
+                synthesis_prompt.format(
+                    query=state["question"],
+                    tools=state.get('tool_results', 'N/A'),
+                    literature=state.get('biorxiv_results', 'N/A'),
+                    skills=skill_results_formatted or 'N/A',
+                )
+            )
+            
+            return {
+                "final_answer": response.content,
+                "sources": ["Comprehensive Analysis"],
+                "messages": [AIMessage(content=response.content)]
+            }
+            
+        except Exception as e:
+            print(f"Synthesis failed: {e}")
+            return {
+                "final_answer": "Failed to synthesize final response.",
+                "sources": ["Error"],
+                "messages": [AIMessage(content="Failed to synthesize final response.")]
+            }
+
+    def _retrieve_node(self, state: AgentState):
+        """Retrieve documents"""
+        question = state["question"]
+        retrieved_docs = self.rag.search(question, top_k=5)
+        return {"retrieved_docs": retrieved_docs}
+
+    def _check_retrieval_quality(self, state: AgentState):
+        """Check if RAG found documents"""
+        if state.get("retrieved_docs") and len(state["retrieved_docs"]) > 0:
+            return "has_docs"
+        return "no_docs"
+
+    def _biorxiv_search_node(self, state: AgentState):
+        """Search bioRxiv/EuropePMC if local RAG failed"""
+        question = state["question"]
+        
+        # Use the integrated search from BiorxivMCPServer
+        # We assume the user wants keywords extracted or we just use the full question?
+        # A simple keyword extraction might be better, but let's try the full question first
+        # or use LLM to extract keywords. For simplicity, we use the question.
+        
+        # Better: Ask LLM to extract keywords? Or just pass question.
+        # EuropePMC search is keyword-based.
+        
+        results = self.biorxiv_server.integrated_search(question, max_results=5)
+        
+        # Convert bioRxiv results to standard retrieved_docs format
+        retrieved_docs = []
+        for p in results:
+            content = f"Title: {p.get('title')}\nAbstract: {p.get('abstract')}\nDOI: {p.get('doi')}"
+            retrieved_docs.append({
+                "title": p.get("title"),
+                "filename": "Online Search (bioRxiv/EuropePMC)",
+                "section": "Abstract",
+                "content": content,
+                "score": 1.0 # Artificial score
+            })
+            
+        return {"retrieved_docs": retrieved_docs}
+
+    def _rag_agent_node(self, state: AgentState, config: RunnableConfig):
+        """Generate answer using RAG context"""
+        question = state["question"]
+        retrieved_docs = state["retrieved_docs"]
+        context = self._build_context(retrieved_docs)
+        messages = state["messages"]
+        
+        # Extract sources for final state
+        sources = []
+        for doc in retrieved_docs:
+            title = doc.get('title', 'Unknown')
+            filename = doc.get('filename', 'Unknown')
+            section = doc.get('section', 'General')
+            sources.append(f"{title} ({filename}, Section: {section})")
+            
+        prompt = self._create_prompt_with_context(question, context)
+        
+        rag_system_msg = SystemMessage(content=f"""You are an expert protein design assistant. 
+        Answer the user's question using the context below. If context is missing info user required, use tools.
+        
+        CONTEXT:
+        {context}
+        """)
+        
+        generation_messages = [rag_system_msg] + messages
+        
+        # Run generation with config (which contains callbacks)
+        response = self.llm_with_tools.invoke(generation_messages, config=config)
+        
+        return {
+            "messages": [response], 
+            "final_answer": response.content,
+            "sources": sources,
+            "retrieved_docs": retrieved_docs # Pass through for final state
+        }
+
+    def query_stream(self, question: str, top_k: int = 5, use_rag: bool = True, thread_id: str = "1"):
+        """Stream the LangGraph execution with token streaming"""
+        
+        initial_state = {
+            "messages": [HumanMessage(content=question)],
+            "question": question,
+            "retrieved_docs": [],
+            "rag_needed": False,
+            "final_answer": "",
+            "sources": ["Protein Database (MCP Tools)"],
+            "uniprot_hits": [],
+            "pdb_hits": []
+        }
+        
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Setup token streaming
+        token_queue = queue.Queue()
+        stream_handler = TokenQueueHandler(token_queue)
+        
+        # Add callback to config
+        # Note: We need to pass this config down to the node that calls the LLM
+        config["callbacks"] = [stream_handler]
+        
+        yield {"type": "status", "content": "Analyzing request..."}
+        
+        # Run graph in a separate thread so we can consume the queue
+        def run_graph():
+            try:
+                # We use .invoke() instead of .stream() because we are capturing tokens via callback
+                # But .stream() gives us node updates which are useful for status
+                # Let's use .stream() and ignore the final output here (we capture via queue)
+                # BUT: .stream() yields partial state.
+                # If we use .stream(), we can yield status updates from main thread
+                
+                for event in self.graph.stream(initial_state, config=config):
+                    # Signal node completion via queue? 
+                    # Or just let the main thread iterate the graph?
+                    # Problem: .stream() blocks until node finishes. 
+                    # So we can't stream tokens from the SAME thread iterating .stream().
+                    # We MUST iterate .stream() in a background thread.
+                    token_queue.put(("event", event))
+                
+                token_queue.put(None) # Sentinel
+            except Exception as e:
+                token_queue.put(("error", e))
+
+        thread = threading.Thread(target=run_graph)
+        thread.start()
+        
+        # Consume queue
+        final_state = initial_state.copy()
+        
+        while True:
+            try:
+                # Block with timeout to allow checking thread status
+                item = token_queue.get(timeout=0.1)
+                
+                if item is None:
+                    break
+                
+                if isinstance(item, tuple) and item[0] == "error":
+                    raise item[1]
+                
+                if isinstance(item, tuple) and item[0] == "event":
+                    # Handle graph event (Node completion)
+                    event = item[1]
+                    for node_name, state_update in event.items():
+                        # Update final state with new values (merge lists where appropriate)
+                        for k, v in state_update.items():
+                            if k in ["uniprot_hits", "pdb_hits", "sources", "retrieved_docs"] and isinstance(v, list):
+                                # For lists, we might want to extend or replace? 
+                                # LangGraph replace by default unless using reducers. 
+                                # But here we are just observing the stream updates.
+                                # The node output usually contains the *new* or *full* list depending on implementation.
+                                # In our case:
+                                # - tools_agent returns accumulated hits.
+                                # - rag_agent returns retrieved_docs/sources.
+                                # So replacing is fine.
+                                final_state[k] = v
+                            else:
+                                final_state[k] = v
+                        
+                        if node_name == "tools_agent":
+                            # Check for tool calls
+                            messages = state_update.get("messages", [])
+                            for msg in messages:
+                                if isinstance(msg, AIMessage) and msg.tool_calls:
+                                    for tc in msg.tool_calls:
+                                        yield {"type": "status", "content": f"Calling tool: {tc['name']}..."}
+                            
+                            if "rag" in self._check_tools_result(state_update):
+                                 yield {"type": "status", "content": "Tools insufficient. Switching to RAG..."}
+                            else:
+                                 yield {"type": "status", "content": "Answer found via tools."}
+                                 # If tools answered directly, we need to yield the content as it wasn't streamed
+                                 # BUT only if we haven't seen tokens? 
+                                 # Tools agent doesn't stream tokens via callback (no config passed).
+                                 # So we yield the final answer here.
+                                 ans = state_update.get("final_answer", "")
+                                 if ans:
+                                     yield {"type": "answer_chunk", "content": ans}
+
+                        elif node_name == "retrieve":
+                            yield {"type": "status", "content": "Retrieving papers..."}
+                        
+                        elif node_name == "biorxiv_search":
+                            yield {"type": "status", "content": "Local papers insufficient. Searching bioRxiv online..."}
+                        
+                        elif node_name == "rag_agent":
+                            yield {"type": "status", "content": "Generating answer..."}
+                    continue
+                
+                # It's a token!
+                yield {"type": "answer_chunk", "content": item}
+                
+            except queue.Empty:
+                # Only break if thread is dead AND queue is empty
+                if not thread.is_alive() and token_queue.empty():
+                    break
+                continue
+
+        thread.join()
+        
+        if final_state:
+             yield {
+                "type": "result",
+                "content": {
+                    "question": question,
+                    "answer": final_state["final_answer"],
+                    "sources": final_state.get("sources", []),
+                    "retrieved_docs": final_state.get("retrieved_docs", []),
+                    "uniprot_hits": final_state.get("uniprot_hits", []),
+                    "pdb_hits": final_state.get("pdb_hits", []),
+                    "context": "LangGraph Execution",
+                    "model": self.model,
+                    "retrieved_chunks": len(final_state.get("retrieved_docs", []))
+                }
+            }
+
+    # Old query method removed or updated to use graph
+    def query(self, question: str, top_k: int = 5, use_rag: bool = True) -> Dict:
+        """Synchronous query using graph"""
+        # ... simplified wrapper around stream ...
+        result = list(self.query_stream(question, top_k, use_rag))[-1] # Get last yield
+        return result["content"]
+
+    def _build_context(self, retrieved_docs: List[Dict]) -> str:
+        """Build context string from retrieved documents"""
+        context_parts = []
+        
+        for i, doc in enumerate(retrieved_docs, 1):
+            title = doc.get('title', 'Unknown')
+            filename = doc.get('filename', 'Unknown')
+            section = doc.get('section', 'General')
+            content = doc.get('content', '')
+            score = doc.get('score', 0.0)
+            
+            source_info = f"{title} ({filename}, Section: {section}, Score: {score:.4f})"
+            
+            context_parts.append(f"[Source {i}: {source_info}]\n{content}\n")
+        
+        return "\n".join(context_parts)
+    
+    def _create_prompt_with_context(self, question: str, context: str) -> str:
+        """Create a prompt that includes retrieved context"""
+        return f"""Based on the following scientific papers and documents about enzyme engineering:
+
+{context}
+
+Please answer this question:
+{question}
+
+Provide a detailed answer based on the context above. When you reference specific information, mention which source number it comes from (e.g., "According to Source 1..." or "Source 2 describes...").
+If the context doesn't fully answer the question, say so and provide what information is available."""
+
+
+def main():
+    """Test the RAG agent"""
+    
+    # Import your LocalPDFRAG
+    import sys
+    # Add parent to path
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from agent.rag.enhanced_paper_rag import LocalPDFRAG
+    
+    # Initialize RAG
+    print("Initializing RAG system...")
+    embedding_port = int(os.getenv("EMBEDDING_PORT", 8000))
+    rag = LocalPDFRAG(
+        pdf_directory="./data/papers",
+        vd_persist_directory="./data/chroma_db",
+        bm25_persist_directory="./data/bm25",
+        embedding_service_url="http://localhost:{}/embed".format(embedding_port)
+    )
+    
+    # Check if papers are indexed
+    stats = rag.get_statistics()
+    if stats['total_papers'] == 0:
+        print("\n⚠️  No papers indexed!")
+        print(f"   Please add PDFs to {rag.pdf_directory}")
+        print("   Then run: uv run agent/rag/enhanced_paper_rag.py --index")
+        return
+    
+    print(f"\n✓ RAG has {stats['total_papers']} papers indexed ({stats['total_chunks']} chunks)")
+    
+    # Initialize agent
+    print("\nInitializing Zenmux agent...")
+    agent = ProteinDesignAgent(rag_instance=rag, model="google/gemini-2.5-flash-lite")
+    
+    # Test questions
+    test_questions = [
+        "What is chalcone isomerase? (Find its EC number)",
+        "Get the amino acid sequence for Hexokinase-1 from Homo sapiens.",
+        "Find papers about ' Evo 2' on bioRxiv."
+    ]
+    
+    print("\n" + "="*80)
+    print("Testing Protein Design Agent with Zenmux (and EC Tools)")
+    print("="*80)
+    
+    for i, question in enumerate(test_questions, 1):
+        print(f"\n{'='*80}")
+        print(f"QUESTION {i}: {question}")
+        print('='*80)
+        
+        result = agent.query(question, top_k=5)
+        
+        print(f"\n📝 ANSWER:")
+        print(result['answer'])
+        
+        print(f"\n\n📚 SOURCES USED ({result['retrieved_chunks']} chunks):")
+        for j, source in enumerate(result['sources'], 1):
+            print(f"  {j}. {source}")
+        
+        print()
+        
+        # Optional: show retrieved document previews
+        if input("\nShow retrieved document previews? (y/n): ").lower() == 'y':
+            for j, doc in enumerate(result['retrieved_docs'], 1):
+                print(f"\n  Document {j}:")
+                print(f"    Score: {doc['score']:.4f}")
+                print(f"    Preview: {doc['content_preview']}")
+        
+        if i < len(test_questions):
+            cont = input("\nContinue to next question? (y/n): ")
+            if cont.lower() != 'y':
+                break
+    
+    print("\n" + "="*80)
+    print("✅ Testing complete!")
+    print("="*80)
+
+
+if __name__ == "__main__":
+    main()

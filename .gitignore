@@ -6,3 +6,6 @@ data/papers/
 *.egg-info/
 .pytest_cache/
 data/
+.cursor/
+.trae/
+*.log

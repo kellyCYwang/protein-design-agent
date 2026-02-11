@@ -1,0 +1,93 @@
+# =============================================================================
+# Main Application Deployment (Streamlit UI + Agent)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: protein-rag-app
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag-app
+    app.kubernetes.io/part-of: protein-design-agent
+spec:
+  replicas: 2  # 2-3 replicas for ~10 users
+  selector:
+    matchLabels:
+      app: protein-rag-app
+  template:
+    metadata:
+      labels:
+        app: protein-rag-app
+    spec:
+      containers:
+        - name: app
+          image: your-registry/protein-rag-app:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8501
+          envFrom:
+            - configMapRef:
+                name: protein-rag-config
+            - secretRef:
+                name: protein-rag-secrets
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: papers
+              mountPath: /app/data/papers
+            - name: chroma
+              mountPath: /app/data/chroma_db
+            - name: bm25
+              mountPath: /app/data/bm25
+            - name: images
+              mountPath: /app/data/pdf_images
+      volumes:
+        - name: papers
+          persistentVolumeClaim:
+            claimName: protein-rag-papers
+        - name: chroma
+          persistentVolumeClaim:
+            claimName: protein-rag-chroma
+        - name: bm25
+          persistentVolumeClaim:
+            claimName: protein-rag-bm25
+        - name: images
+          persistentVolumeClaim:
+            claimName: protein-rag-images
+
+---
+# Main App Service - ClusterIP (accessed via Ingress)
+apiVersion: v1
+kind: Service
+metadata:
+  name: protein-rag-app
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag-app
+spec:
+  type: ClusterIP
+  selector:
+    app: protein-rag-app
+  ports:
+    - port: 8501
+      targetPort: 8501
+      protocol: TCP

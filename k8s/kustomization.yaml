@@ -1,0 +1,30 @@
+# =============================================================================
+# Kustomization - Deploy all resources with: kubectl apply -k k8s/
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: protein-rag
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - pvc.yaml
+  - deployment-embedding.yaml
+  - deployment-app.yaml
+  - ingress.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/version: "0.1.0"
+
+# Image customization - update these with your registry
+images:
+  - name: your-registry/protein-rag-app
+    newName: your-registry/protein-rag-app
+    newTag: latest
+  - name: your-registry/protein-rag-embedding
+    newName: your-registry/protein-rag-embedding
+    newTag: latest

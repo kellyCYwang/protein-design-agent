@@ -1,3 +1,4 @@
+import uuid
 import streamlit as st
 import re
 try:
@@ -64,9 +65,17 @@ def main():
         st.divider()
 
         # In your sidebar section of app.py
+        if st.button("🔄 New Conversation"):
+            # Reset the thread_id so the checkpointer starts a fresh history
+            st.session_state.thread_id = str(uuid.uuid4())
+            st.session_state.messages = []
+            st.rerun()
+        
         if st.button("🔄 Reload Agent"):
             if "agent" in st.session_state:
                 del st.session_state.agent
+            st.session_state.thread_id = str(uuid.uuid4())
+            st.session_state.messages = []
             st.rerun()
         
         st.header("📋 Example Queries")
@@ -98,6 +107,11 @@ def main():
     # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    
+    # Each session gets a unique thread_id so the LangGraph checkpointer
+    # can store and retrieve conversation history for this user.
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = str(uuid.uuid4())
     
     if "agent" not in st.session_state:
         with st.spinner("Loading agent..."):
@@ -138,9 +152,10 @@ def main():
                 final_response = None
                 
                 with st.spinner("Processing..."):
-                    for event in agent.stream({
-                        "messages": [("human", user_query)]
-                    }):
+                    for event in agent.stream(
+                        {"messages": [("human", user_query)]},
+                        {"configurable": {"thread_id": st.session_state.thread_id}},
+                    ):
                         events.append(event)
                         
                         # Update status based on event

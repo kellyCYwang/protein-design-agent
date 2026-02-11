@@ -1,0 +1,68 @@
+# =============================================================================
+# Protein Design Agent - Embedding Service
+# =============================================================================
+# Serves PubMedBERT embeddings via FastAPI
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install only embedding service dependencies
+RUN pip install --no-cache-dir \
+    fastapi>=0.128.0 \
+    uvicorn>=0.40.0 \
+    sentence-transformers>=5.2.0 \
+    pydantic>=2.12.5 \
+    python-dotenv>=1.2.1 \
+    torch
+
+# =============================================================================
+# Runtime stage
+# =============================================================================
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash appuser
+
+# Create cache directory for model downloads
+RUN mkdir -p /home/appuser/.cache/huggingface \
+    && chown -R appuser:appuser /home/appuser/.cache
+
+# Copy embedding service
+COPY --chown=appuser:appuser embedding_service.py ./
+
+# Switch to non-root user
+USER appuser
+
+# Environment variables
+ENV EMBEDDING_PORT=8000 \
+    HF_HOME=/home/appuser/.cache/huggingface \
+    TRANSFORMERS_CACHE=/home/appuser/.cache/huggingface
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run embedding service
+CMD ["python", "embedding_service.py"]

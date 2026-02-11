@@ -1,0 +1,10 @@
+# =============================================================================
+# Namespace for Protein RAG Agent
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+    app.kubernetes.io/part-of: protein-design-agent

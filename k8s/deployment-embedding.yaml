@@ -1,0 +1,76 @@
+# =============================================================================
+# Embedding Service Deployment
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: embedding-service
+    app.kubernetes.io/part-of: protein-design-agent
+spec:
+  replicas: 1  # Scale based on load; embedding model uses significant memory
+  selector:
+    matchLabels:
+      app: embedding-service
+  template:
+    metadata:
+      labels:
+        app: embedding-service
+    spec:
+      containers:
+        - name: embedding-service
+          image: your-registry/protein-rag-embedding:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: EMBEDDING_PORT
+              value: "8000"
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: model-cache
+              mountPath: /home/appuser/.cache/huggingface
+      volumes:
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 5Gi  # Cache downloaded models
+
+---
+# Embedding Service - ClusterIP (internal access only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-service
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: embedding-service
+spec:
+  type: ClusterIP
+  selector:
+    app: embedding-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP

@@ -1,0 +1,45 @@
+# =============================================================================
+# Ingress - External access with TLS
+# =============================================================================
+# Requires an Ingress controller (nginx-ingress, traefik, etc.)
+# and cert-manager for automatic TLS certificate provisioning
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: protein-rag-ingress
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+  annotations:
+    # NGINX Ingress Controller annotations
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"  # For PDF uploads
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    
+    # WebSocket support for Streamlit
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+    
+    # cert-manager annotations for automatic TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - protein-rag.your-domain.com  # Replace with your domain
+      secretName: protein-rag-tls
+  rules:
+    - host: protein-rag.your-domain.com  # Replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: protein-rag-app
+                port:
+                  number: 8501

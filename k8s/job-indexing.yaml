@@ -1,0 +1,133 @@
+# =============================================================================
+# Indexing Job - Initial PDF indexing
+# =============================================================================
+# Run once after deployment or as a CronJob for periodic reindexing
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: protein-rag-index
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag-index
+    app.kubernetes.io/part-of: protein-design-agent
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400  # Clean up after 24 hours
+  template:
+    metadata:
+      labels:
+        app: protein-rag-index
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: indexer
+          image: your-registry/protein-rag-app:latest
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - agent.rag.rag_cli
+            - --index
+          envFrom:
+            - configMapRef:
+                name: protein-rag-config
+            - secretRef:
+                name: protein-rag-secrets
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: papers
+              mountPath: /app/data/papers
+            - name: chroma
+              mountPath: /app/data/chroma_db
+            - name: bm25
+              mountPath: /app/data/bm25
+            - name: images
+              mountPath: /app/data/pdf_images
+      volumes:
+        - name: papers
+          persistentVolumeClaim:
+            claimName: protein-rag-papers
+        - name: chroma
+          persistentVolumeClaim:
+            claimName: protein-rag-chroma
+        - name: bm25
+          persistentVolumeClaim:
+            claimName: protein-rag-bm25
+        - name: images
+          persistentVolumeClaim:
+            claimName: protein-rag-images
+
+---
+# Optional: CronJob for periodic reindexing (e.g., weekly)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: protein-rag-reindex
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag-reindex
+    app.kubernetes.io/part-of: protein-design-agent
+spec:
+  schedule: "0 2 * * 0"  # Every Sunday at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: protein-rag-reindex
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: indexer
+              image: your-registry/protein-rag-app:latest
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - agent.rag.rag_cli
+                - --index
+              envFrom:
+                - configMapRef:
+                    name: protein-rag-config
+                - secretRef:
+                    name: protein-rag-secrets
+              resources:
+                requests:
+                  memory: "2Gi"
+                  cpu: "1000m"
+                limits:
+                  memory: "4Gi"
+                  cpu: "2000m"
+              volumeMounts:
+                - name: papers
+                  mountPath: /app/data/papers
+                - name: chroma
+                  mountPath: /app/data/chroma_db
+                - name: bm25
+                  mountPath: /app/data/bm25
+                - name: images
+                  mountPath: /app/data/pdf_images
+          volumes:
+            - name: papers
+              persistentVolumeClaim:
+                claimName: protein-rag-papers
+            - name: chroma
+              persistentVolumeClaim:
+                claimName: protein-rag-chroma
+            - name: bm25
+              persistentVolumeClaim:
+                claimName: protein-rag-bm25
+            - name: images
+              persistentVolumeClaim:
+                claimName: protein-rag-images

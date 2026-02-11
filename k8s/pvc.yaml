@@ -1,0 +1,73 @@
+# =============================================================================
+# Persistent Volume Claims
+# =============================================================================
+# Shared storage for PDFs, ChromaDB, BM25 index, and extracted images
+
+---
+# PVC for PDF papers - shared across all pods
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: protein-rag-papers
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods need access
+  resources:
+    requests:
+      storage: 10Gi
+  # Uncomment and set storageClassName for your cluster
+  # storageClassName: nfs-client
+
+---
+# PVC for ChromaDB data - shared for local vector DB
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: protein-rag-chroma
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: nfs-client
+
+---
+# PVC for BM25 index
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: protein-rag-bm25
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: nfs-client
+
+---
+# PVC for extracted PDF images
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: protein-rag-images
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: nfs-client

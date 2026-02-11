@@ -1,0 +1,36 @@
+# =============================================================================
+# ConfigMap - Non-sensitive configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: protein-rag-config
+  namespace: protein-rag
+  labels:
+    app.kubernetes.io/name: protein-rag
+data:
+  # RAG backend selection: "chroma" or "pinecone"
+  RAG_BACKEND: "chroma"
+  
+  # Directory paths (relative to container, mounted via PVC)
+  RAG_PDF_DIR: "/app/data/papers"
+  RAG_CHROMA_DIR: "/app/data/chroma_db"
+  RAG_BM25_DIR: "/app/data/bm25"
+  RAG_IMAGE_DIR: "/app/data/pdf_images"
+  
+  # Embedding service URL (K8s service discovery)
+  EMBEDDING_SERVICE_URL: "http://embedding-service:8000/embed"
+  
+  # Pinecone settings (non-sensitive)
+  PINECONE_INDEX_NAME: "paper-rag-index"
+  PINECONE_NAMESPACE: "papers"
+  PINECONE_CLOUD: "aws"
+  PINECONE_REGION: "us-east-1"
+  
+  # LLM settings
+  ROUTER_MODEL: "gpt-4o-mini"
+  WORKER_MODEL: "gpt-4o"
+  
+  # Streamlit settings
+  STREAMLIT_SERVER_PORT: "8501"
+  STREAMLIT_SERVER_ADDRESS: "0.0.0.0"

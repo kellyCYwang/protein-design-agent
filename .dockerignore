@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursor/
+.trae/
+
+# Git
+.git/
+.gitignore
+
+# Data (mounted as volumes in K8s)
+data/
+*.pkl
+*.sqlite3
+
+# Logs
+*.log
+
+# Tests
+tests/
+pytest_cache/
+.coverage
+
+# Notebooks
+notebooks/
+*.ipynb
+
+# Documentation
+docs/
+*.md
+!agent/rag/README.md
+
+# Build artifacts
+*.tar
+*.gz
+dist/
+build/
+
+# K8s manifests (not needed in image)
+k8s/
+
+# Backup files
+*.bak
+*.backup
+
+# Lock files (use pyproject.toml)
+uv.lock

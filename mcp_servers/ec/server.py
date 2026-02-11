@@ -115,44 +115,44 @@ class ECMCPServer:
 
         return data
     
-    def lookup_ec_number(self, ec_number: str) -> Dict:
-        """
-        Look up enzyme information by EC number
+    # def lookup_ec_number(self, ec_number: str) -> Dict:
+    #     """
+    #     Look up enzyme information by EC number
         
-        Args:
-            ec_number: EC number (e.g., "5.5.1.6" for chalcone isomerase)
+    #     Args:
+    #         ec_number: EC number (e.g., "5.5.1.6" for chalcone isomerase)
             
-        Returns:
-            Enzyme information including name, reactions, cofactors
-        """
+    #     Returns:
+    #         Enzyme information including name, reactions, cofactors
+    #     """
         
-        # Clean EC number format
-        ec_number = ec_number.strip().replace(" ", "")
+    #     # Clean EC number format
+    #     ec_number = ec_number.strip().replace(" ", "")
         
-        html_url = f"{self.EXPASY_BASE}/EC/{ec_number}"
-        raw_url = f"{self.EXPASY_BASE}/EC/{ec_number}.txt"
+    #     html_url = f"{self.EXPASY_BASE}/EC/{ec_number}"
+    #     raw_url = f"{self.EXPASY_BASE}/EC/{ec_number}.txt"
         
-        try:
-            response = requests.get(raw_url, timeout=30)
-            response.raise_for_status()
-            content = response.text
+    #     try:
+    #         response = requests.get(raw_url, timeout=30)
+    #         response.raise_for_status()
+    #         content = response.text
 
-            data = {
-                "ec_number": ec_number,
-                "url": html_url,
-                "raw_url": raw_url,
-            }
+    #         data = {
+    #             "ec_number": ec_number,
+    #             "url": html_url,
+    #             "raw_url": raw_url,
+    #         }
 
-            data.update(self._parse_expasy_enzyme_txt(content))
+    #         data.update(self._parse_expasy_enzyme_txt(content))
             
-            return data
+    #         return data
             
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                return {"error": f"EC number {ec_number} not found"}
-            return {"error": f"Failed to lookup EC number: {str(e)}"}
-        except Exception as e:
-            return {"error": f"Error looking up EC number: {str(e)}"}
+    #     except requests.exceptions.HTTPError as e:
+    #         if e.response.status_code == 404:
+    #             return {"error": f"EC number {ec_number} not found"}
+    #         return {"error": f"Failed to lookup EC number: {str(e)}"}
+    #     except Exception as e:
+    #         return {"error": f"Error looking up EC number: {str(e)}"}
     
     def search_uniprot(self, enzyme_name: str) -> List[Dict]:
         """Search UniProt for EC numbers"""

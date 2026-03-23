@@ -19,7 +19,6 @@ from rank_bm25 import BM25Okapi
 
 from agent.rag.pdf_processing import (
     get_embeddings,
-    extract_metadata_from_pdf,
     process_pdf,
     list_pdfs,
     DEFAULT_IMAGE_OUTPUT_ROOT,
@@ -130,117 +129,49 @@ class ChromaPDFRAG:
         except Exception as e:
             print(f"  ❌ Failed to save BM25: {e}")
 
-    def _link_images_to_chunks(
-        self,
-        chunks: List[Dict],
-        images: List[Dict]
-    ) -> List[Dict]:
-        """
-        Link extracted images to chunks based on figure IDs.
-        
-        Args:
-            chunks: List of chunk dictionaries with figure_ids
-            images: List of image records with figure_id and page
-            
-        Returns:
-            Updated chunks with 'image_paths' field added
-        """
-        # Build figure_id -> image paths mapping
-        figure_to_images: Dict[str, List[str]] = {}
-        for img in images:
-            fid = img.get("figure_id")
-            if fid:
-                figure_to_images.setdefault(fid, []).append(img["path"])
-        
-        # Link images to chunks
-        for chunk in chunks:
-            image_paths: List[str] = []
-            
-            # Match by figure IDs referenced in the chunk
-            for fid in chunk.get("figure_ids", []):
-                if fid in figure_to_images:
-                    image_paths.extend(figure_to_images[fid])
-                else:
-                    # Try partial match (e.g. chunk says "Figure 1" but image is "Figure 1A")
-                    for img_fid, paths in figure_to_images.items():
-                        if fid in img_fid or img_fid in fid:
-                            image_paths.extend(paths)
-            
-            # Deduplicate and sort
-            chunk["image_paths"] = sorted(set(image_paths))
-        
-        return chunks
-
     def index_pdf(self, pdf_path: str, reindex: bool = False) -> int:
         """
         Index a single PDF with optional image extraction and figure-chunk linking.
-        
+
         Args:
             pdf_path: Path to the PDF file
             reindex: If True, re-index even if already present
-            
+
         Returns:
             Number of chunks indexed
         """
-        print(f"\nProcessing: {Path(pdf_path).name}")
-        
         # Check if already indexed (naive check by filename in metadata)
         if not reindex:
             existing = self.collection.get(where={"filename": Path(pdf_path).name})
             if existing['ids']:
+                print(f"\nProcessing: {Path(pdf_path).name}")
                 print(f"  Skipping (already indexed)")
                 return 0
 
-        metadata = extract_metadata_from_pdf(pdf_path)
-        print(f"  Title: {metadata['title'][:60]}...")
+        result = process_pdf(pdf_path, self.embedding_service_url, self.image_output_root, self.extract_images)
+        metadata, chunks, embeddings = result["metadata"], result["chunks"], result["embeddings"]
 
-        # Extract images (if enabled)
-        images: List[Dict] = []
-        if self.extract_images:
-            images = extract_images_from_pdf(pdf_path, output_root=self.image_output_root)
-
-        # Extract Markdown
-        md_text = extract_text_as_markdown(pdf_path)
-        if not md_text:
-            return 0
-        
-        # Chunk (now includes figure_ids, table_ids detection)
-        chunks = chunk_text(md_text, metadata['title'])
-        print(f"  Created {len(chunks)} chunks")
-        
         if not chunks:
             return 0
 
-        # Link images to chunks based on figure IDs
-        if images:
-            chunks = self._link_images_to_chunks(chunks, images)
-            linked_count = sum(1 for c in chunks if c.get("image_paths"))
-            print(f"  Linked images to {linked_count} chunks")
-
-        # Prepare for Chroma
         documents = []
-        embeddings = []
+        emb_list = []
         metadatas = []
         ids = []
-        
+
         paper_id = Path(pdf_path).stem
-        
-        # Batch embedding generation
-        texts_to_embed = [chunk["content"] for chunk in chunks]
-        embeddings_list = self._get_embeddings(texts_to_embed)
-        
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings_list)):
+
+        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             chunk_id = f"{paper_id}_chunk_{idx}"
-            
-            documents.append(chunk["content"])
-            embeddings.append(embedding)
-            ids.append(chunk_id)
-            
-            # Get figure_ids, table_ids, and image_paths
+
             figure_ids = chunk.get("figure_ids", [])
             table_ids = chunk.get("table_ids", [])
             image_paths = chunk.get("image_paths", [])
-            
+
+            documents.append(chunk["content"])
+            emb_list.append(embedding)
+            ids.append(chunk_id)
+
             meta = {
                 "title": metadata['title'][:500],
                 "author": metadata['author'][:200],
@@ -257,23 +188,14 @@ class ChromaPDFRAG:
             }
             metadatas.append(meta)
 
-        # Add to Chroma
         self.collection.add(
             documents=documents,
-            embeddings=embeddings,
+            embeddings=emb_list,
             metadatas=metadatas,
             ids=ids
         )
-        
-        # Update in-memory BM25
-        # (For efficiency, we might just rebuild fully at end of batch, but for single file:)
-        if self.bm25 is None:
-            self._load_bm25()
-        else:
-            # Incremental update is hard with BM25Okapi class, so we might need to rebuild
-            # or just append if we implement a custom one. 
-            # For simplicity, we'll rebuild BM25 after indexing a batch of files.
-            pass 
+
+        self._load_bm25(force_rebuild=True)
 
         return len(chunks)
 

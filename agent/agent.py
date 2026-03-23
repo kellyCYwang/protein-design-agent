@@ -14,7 +14,8 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+import sqlite3
 import sys
 import os
 
@@ -433,12 +434,6 @@ def build_agent(model: str = "gpt-4o-mini", temperature: float = 0):
         openai_api_base=base_url,
     )
 
-    # #region agent log
-    import json as _json
-    with open("/home/kellywang/project/protein_projects/protein-design-agent/.cursor/debug.log", "a") as _f:
-        _f.write(_json.dumps({"hypothesisId": "H-A,H-B,H-D", "location": "agent.py:build_agent", "message": "LLM config", "data": {"router_model": router_model, "worker_model": worker_model, "router_temp": 0, "worker_temp": temperature}, "sessionId": "debug-session", "runId": "run1"}) + "\n")
-    # #endregion
-
     # Initialize RAG backend (Chroma or Pinecone based on RAG_BACKEND env var)
     rag = create_rag_backend()
     rag_backend_type = os.getenv("RAG_BACKEND", "chroma").lower()
@@ -557,12 +552,6 @@ Examples:
         query_type = raw[0] if raw else "detailed"
         skill_name = raw[1] if len(raw) > 1 else "none"
         
-        # #region agent log
-        import json as _json
-        with open("/home/kellywang/project/protein_projects/protein-design-agent/.cursor/debug.log", "a") as _f:
-            _f.write(_json.dumps({"hypothesisId": "H-B", "location": "agent.py:route_query", "message": "router succeeded", "data": {"router_model": router_model, "query_type": query_type, "skill_name": skill_name}, "sessionId": "debug-session", "runId": "run1"}) + "\n")
-        # #endregion
-        
         # Validate query type
         if query_type not in ["simple", "detailed", "research"]:
             query_type = "detailed"  # safer default if unclear
@@ -607,12 +596,6 @@ Examples:
     
     def detailed_handler(state: AgentState):
         """Handle detailed queries, injecting only the matched skill (if any)."""
-        # #region agent log
-        import json as _json
-        with open("/home/kellywang/project/protein_projects/protein-design-agent/.cursor/debug.log", "a") as _f:
-            _f.write(_json.dumps({"hypothesisId": "H-C", "location": "agent.py:detailed_handler", "message": "entering detailed_handler", "data": {"worker_model": worker_model, "worker_temp": temperature, "skill_name": state.get("skill_name", "")}, "sessionId": "debug-session", "runId": "run1"}) + "\n")
-        # #endregion
-        
         llm_with_tools = worker_llm.bind_tools(tools)
         
         # Add skill / RAG instructions if not already present
@@ -745,10 +728,13 @@ Examples:
         }
     )
     
-    # Use a checkpointer so the agent remembers prior turns per thread_id.
+    # Use a SQLite checkpointer so conversation history persists across restarts.
     # Each call with the same thread_id will load the previous messages
     # and append the new ones, giving the LLM full conversation context.
-    memory = MemorySaver()
+    db_path = os.getenv("CHECKPOINT_DB_PATH", "./data/checkpoints.db")
+    os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    memory = SqliteSaver(conn)
     return workflow.compile(checkpointer=memory)
 
 

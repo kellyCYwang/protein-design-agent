@@ -19,10 +19,7 @@ from rank_bm25 import BM25Okapi
 
 from agent.rag.pdf_processing import (
     get_embeddings,
-    extract_metadata_from_pdf,
-    extract_text_as_markdown,
-    extract_images_from_pdf,
-    chunk_text,
+    process_pdf,
     list_pdfs,
     DEFAULT_IMAGE_OUTPUT_ROOT,
 )
@@ -161,124 +158,52 @@ class PineconePDFRAG:
         print(f"  BM25 rebuilt with {len(self.bm25_documents)} documents.")
         self._save_bm25()
 
-    def _link_images_to_chunks(
-        self,
-        chunks: List[Dict],
-        images: List[Dict]
-    ) -> List[Dict]:
-        """
-        Link extracted images to chunks based on figure IDs.
-        
-        Args:
-            chunks: List of chunk dictionaries with figure_ids
-            images: List of image records with figure_id and page
-            
-        Returns:
-            Updated chunks with 'image_paths' field added
-        """
-        # Build figure_id -> image paths mapping
-        figure_to_images: Dict[str, List[str]] = {}
-        for img in images:
-            fid = img.get("figure_id")
-            if fid:
-                figure_to_images.setdefault(fid, []).append(img["path"])
-        
-        # Link images to chunks
-        for chunk in chunks:
-            image_paths: List[str] = []
-            
-            # Match by figure IDs referenced in the chunk
-            for fid in chunk.get("figure_ids", []):
-                if fid in figure_to_images:
-                    image_paths.extend(figure_to_images[fid])
-                else:
-                    # Try partial match (e.g. chunk says "Figure 1" but image is "Figure 1A")
-                    for img_fid, paths in figure_to_images.items():
-                        if fid in img_fid or img_fid in fid:
-                            image_paths.extend(paths)
-            
-            # Deduplicate and sort
-            chunk["image_paths"] = sorted(set(image_paths))
-        
-        return chunks
-
     def index_pdf(self, pdf_path: str, reindex: bool = False) -> int:
         """
         Index a single PDF into Pinecone with optional image extraction and figure-chunk linking.
-        
+
         Args:
             pdf_path: Path to the PDF file
             reindex: If True, re-index even if already present
-            
+
         Returns:
             Number of chunks indexed
         """
-        print(f"\nProcessing: {Path(pdf_path).name}")
-        
         paper_id = Path(pdf_path).stem
-        
-        # Check if already indexed (query for any vectors with this paper_id prefix)
+
+        # Check if already indexed
         if not reindex:
             try:
-                # Try to fetch a sample vector to check if paper exists
                 sample_id = f"{paper_id}_chunk_0"
                 fetch_result = self.index.fetch(ids=[sample_id], namespace=self.pinecone_namespace)
                 if fetch_result.vectors and sample_id in fetch_result.vectors:
+                    print(f"\nProcessing: {Path(pdf_path).name}")
                     print(f"  Skipping (already indexed)")
                     return 0
             except Exception:
-                pass  # Continue with indexing
+                pass
 
-        metadata = extract_metadata_from_pdf(pdf_path)
-        print(f"  Title: {metadata['title'][:60]}...")
+        result = process_pdf(pdf_path, self.embedding_service_url, self.image_output_root, self.extract_images)
+        metadata, chunks, embeddings = result["metadata"], result["chunks"], result["embeddings"]
 
-        # Extract images (if enabled)
-        images: List[Dict] = []
-        if self.extract_images:
-            images = extract_images_from_pdf(pdf_path, output_root=self.image_output_root)
-
-        # Extract Markdown
-        md_text = extract_text_as_markdown(pdf_path)
-        if not md_text:
-            return 0
-        
-        # Chunk (now includes figure_ids, table_ids detection)
-        chunks = chunk_text(md_text, metadata['title'])
-        print(f"  Created {len(chunks)} chunks")
-        
         if not chunks:
             return 0
 
-        # Link images to chunks based on figure IDs
-        if images:
-            chunks = self._link_images_to_chunks(chunks, images)
-            linked_count = sum(1 for c in chunks if c.get("image_paths"))
-            print(f"  Linked images to {linked_count} chunks")
-
-        # Batch embedding generation
-        texts_to_embed = [chunk["content"] for chunk in chunks]
-        embeddings_list = self._get_embeddings(texts_to_embed)
-        
-        # Prepare vectors for Pinecone upsert
         vectors = []
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings_list)):
+        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             chunk_id = f"{paper_id}_chunk_{idx}"
-            
-            # Store content in metadata (Pinecone metadata has limits, truncate if needed)
+
             content = chunk["content"]
             if len(content) > 40000:  # Pinecone metadata limit is ~40KB
                 content = content[:40000]
-            
-            # Get figure_ids, table_ids, and image_paths
+
             figure_ids = chunk.get("figure_ids", [])
             table_ids = chunk.get("table_ids", [])
             image_paths = chunk.get("image_paths", [])
-            
-            # Store lists as JSON strings for Pinecone (ensure they stay short)
-            # Limit image_paths to avoid metadata size limits
+
             if len(json.dumps(image_paths)) > 1000:
-                image_paths = image_paths[:5]  # Keep only first 5
-            
+                image_paths = image_paths[:5]
+
             vector_metadata = {
                 "content": content,
                 "title": metadata['title'][:500],
@@ -289,30 +214,30 @@ class PineconePDFRAG:
                 "total_chunks": len(chunks),
                 "has_table": chunk.get("has_table", False),
                 "has_figure": chunk.get("has_figure", False),
-                # Store lists as JSON strings
                 "figure_ids": json.dumps(figure_ids),
                 "table_ids": json.dumps(table_ids),
                 "image_paths": json.dumps(image_paths),
             }
-            
+
             vectors.append({
                 "id": chunk_id,
                 "values": embedding,
                 "metadata": vector_metadata
             })
-            
-            # Update BM25 data structures
+
             if self.use_hybrid_search:
                 self.bm25_doc_ids.append(chunk_id)
                 self.bm25_documents.append(chunk["content"])
 
-        # Upsert to Pinecone in batches (Pinecone recommends batches of 100)
         batch_size = 100
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i:i + batch_size]
             self.index.upsert(vectors=batch, namespace=self.pinecone_namespace)
-        
+
         print(f"  Upserted {len(vectors)} vectors to Pinecone")
+
+        if self.use_hybrid_search:
+            self._rebuild_bm25()
 
         return len(chunks)
 

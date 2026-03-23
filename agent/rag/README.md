@@ -195,7 +195,6 @@ The `search_research_papers` tool wraps whichever backend is configured, so the 
 - `chroma_rag.py` - ChromaDB-backed RAG with hybrid search and image-chunk linking
 - `pinecone_rag.py` - Pinecone-backed RAG with optional hybrid search and image-chunk linking
 - `rag_cli.py` - Command-line interface for indexing and search
-- `paper_rag.py` - (Legacy) Original implementation, kept for backwards compatibility
 
 ## Data Directory Structure
 

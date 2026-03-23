@@ -17,10 +17,8 @@ from agent.rag.pdf_processing import (
     get_embeddings,
     extract_metadata_from_pdf,
     extract_text_as_markdown,
-    extract_pdf_with_page_chunks,
     extract_images_from_pdf,
     chunk_text,
-    chunk_text_with_pages,
     process_pdf,
     list_pdfs,
 )
@@ -33,10 +31,8 @@ __all__ = [
     "get_embeddings",
     "extract_metadata_from_pdf",
     "extract_text_as_markdown",
-    "extract_pdf_with_page_chunks",
     "extract_images_from_pdf",
     "chunk_text",
-    "chunk_text_with_pages",
     "process_pdf",
     "list_pdfs",
 ]

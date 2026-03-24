@@ -1,103 +1,226 @@
-# 🧬 Protein Design Research Agent
+# Protein Design Research Agent
 
-An AI-powered assistant for protein engineering and enzyme design research. This tool integrates **RAG (Retrieval-Augmented Generation)** with **Agentic Workflows** (powered by LangGraph & Zenmux/Gemini) to help researchers find papers, query protein databases, and synthesize information.
+An AI-powered assistant for protein engineering and enzyme design research. Integrates **RAG (Retrieval-Augmented Generation)** with **agentic workflows** (LangGraph) and a modern React interface for querying protein databases, searching literature, and visualizing 3D structures.
 
-## 🚀 Key Features
+---
 
-### � Enhanced RAG System
-The system uses an advanced Retrieval-Augmented Generation pipeline (`agent/rag/enhanced_paper_rag.py`) designed for scientific literature:
-*   **Hybrid Search**: Combines **Vector Search** (semantic similarity via `pubmedbert-base-embeddings`) and **Keyword Search** (BM25) using Reciprocal Rank Fusion (RRF) for high-precision retrieval.
-*   **Markdown Parsing**: Uses `pymupdf4llm` to convert PDFs into structured Markdown, preserving headers, tables, and lists better than plain text extraction.
-*   **Hierarchical Chunking**: Splits documents by headers first, then paragraphs, ensuring chunks respect document structure.
-*   **Context Enrichment**: Every chunk is tagged with its source paper title and section hierarchy (e.g., `Methods > Protein Purification`) for better LLM context.
+## Features
 
-### 🤖 Agentic Workflow (LangGraph)
-The agent (`agent/enzyme_agent.py`) follows a sophisticated reasoning loop:
-1.  **Tools First Strategy**: It first attempts to answer queries using precise tools (e.g., "What is the EC number of X?") without hallucinating.
-2.  **Fallback to RAG**: If tools are insufficient, it retrieves context from your local PDF library.
-3.  **Online Search Fallback**: If local papers don't cover the topic, it automatically searches **bioRxiv/EuropePMC** for the latest preprints.
+### Intelligent Query Routing
+The LangGraph agent classifies every query and routes it through the appropriate path:
+- **Simple** — fast EC number lookups via a lightweight router model
+- **Detailed** — full tool-calling workflow (PDB, UniProt, ExplorEnz, arXiv, biorXiv)
+- **Research** — hybrid RAG over local PDF library, then detailed analysis
 
-### � Integrated MCP Servers
-The project adopts a modular **Model Context Protocol (MCP)** style architecture for tools:
-*   **🧬 UniProt Server**:
-    *   Search proteins by name, function, or gene.
-    *   Retrieve full amino acid sequences, organism details, and lengths.
-    *   *New*: Robust query handling and "Click-to-View" results in the UI.
-*   **🔢 EC Server**:
-    *   Look up Enzyme Commission numbers by name.
-    *   Get reaction patterns and systematic names.
-*   **� BioRxiv/EuropePMC Server**:
-    *   Search for recent preprints and publications.
-    *   Retrieve abstracts and DOIs.
+### Hybrid RAG Pipeline
+- **Vector search** via PubMedBERT embeddings (`neuml/pubmedbert-base-embeddings`)
+- **BM25 keyword search** fused with Reciprocal Rank Fusion (k=60)
+- PDF processing with **Docling** → Markdown → `MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter`
+- Supports both **ChromaDB** (local) and **Pinecone** (cloud) backends
+- Chunks are prefixed with `Paper Title | Section` for context enrichment
 
-## 🛠️ Technology Stack
+### MCP-style Tool Servers
+Modular servers in `mcp_servers/` each expose search/lookup methods:
 
-*   **Frontend**: [Streamlit](https://streamlit.io/)
-*   **LLM**: Zenmux (Gemini 2.5 Flash Lite) via [LangChain](https://www.langchain.com/)
-*   **Orchestration**: [LangGraph](https://langchain-ai.github.io/langgraph/)
-*   **Vector DB**: [ChromaDB](https://www.trychroma.com/)
-*   **Embeddings**: Sentence-Transformers (`all-MiniLM-L6-v2`)
-*   **PDF Processing**: PyMuPDF
+| Server | Data source |
+|--------|-------------|
+| `ec/` | ExplorEnz — EC number classification |
+| `pdb/` | RCSB GraphQL — structure data |
+| `uniprot/` | UniProt REST — sequences & annotations |
+| `arxiv/` | arXiv Atom feed |
+| `biorxiv/` | EuropePMC REST |
 
-## 📦 Installation
+### Skill System
+Drop a Markdown file into `agent/skills/` and the router automatically gains the ability to select it. The file's content is injected as a system prompt for the detailed handler — no code changes needed.
 
-1.  **Clone the repository**:
-    ```bash
-    git clone <repository-url>
-    cd protein-design-agent
-    ```
+### React Frontend
+A custom React/TypeScript/Vite UI replaces the previous Streamlit app, served through a FastAPI SSE streaming backend.
 
-2.  **Install dependencies** (using `uv` is recommended):
-    ```bash
-    uv sync
-    # OR with pip
-    pip install -r requirements.txt
-    ```
+- Live **pipeline status bar** showing agent routing → tools → response in real time
+- Full **Markdown rendering** with syntax-highlighted code blocks
+- Automatic **PDB ID detection** in responses with one-click structure loading
+- **3D protein viewer** (3Dmol.js) with rainbow cartoon rendering
+  - Drag the left border to resize the panel (280–900 px)
+  - **Sequence strip** showing residues color-coded by type (hydrophobic / polar / charged± / glycine)
+  - Click any residue to highlight it in the 3D view with a gold sphere overlay
+- Persistent conversation memory via `SqliteSaver` (per session `thread_id`)
 
-3.  **Set up Environment Variables**:
-    Create a `.env` file in the root directory:
-    ```bash
-    ZENMUX_API_KEY=your_zenmux_api_key_here
-    # Optional: ZENMUX_BASE_URL if using a custom endpoint
-    ```
+---
 
-## 🏃‍♂️ Usage
+## Technology Stack
 
-### 1. Index Your Papers
-Place your PDF research papers in the `data/papers` directory. Then run the indexing script:
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18, TypeScript, Vite |
+| Styling | Pure CSS (IBM Plex Mono + Cormorant Garamond) |
+| 3D Viewer | 3Dmol.js (CDN) |
+| API server | FastAPI + Uvicorn/Gunicorn (SSE streaming) |
+| Agent | LangGraph `StateGraph`, `SqliteSaver` checkpointer |
+| LLM | OpenAI-compatible (Zenmux) — configurable router + worker models |
+| RAG — local | ChromaDB + BM25 |
+| RAG — cloud | Pinecone + BM25 |
+| Embeddings | PubMedBERT microservice (FastAPI, port 8000) |
+| PDF processing | Docling → Markdown |
+| Observability | LangSmith (optional) |
+
+---
+
+## Project Structure
+
+```
+protein-design-agent/
+├── agent/
+│   ├── agent.py              # LangGraph StateGraph + query routing
+│   ├── skills/               # Markdown skill files (auto-discovered)
+│   └── rag/
+│       ├── chroma_rag.py
+│       ├── pinecone_rag.py
+│       ├── pdf_processing.py
+│       └── rag_cli.py
+├── mcp_servers/
+│   ├── ec/server.py
+│   ├── pdb/server.py
+│   ├── uniprot/server.py
+│   ├── arxiv/server.py
+│   └── biorxiv/server.py
+├── frontend/                 # React/TypeScript/Vite app
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   │   ├── Sidebar.tsx
+│   │   │   ├── ChatArea.tsx
+│   │   │   ├── MessageBubble.tsx
+│   │   │   ├── PipelineStatus.tsx
+│   │   │   └── ProteinViewer.tsx
+│   │   ├── hooks/useChat.ts  # SSE streaming + agent state
+│   │   ├── types/index.ts
+│   │   └── styles/globals.css
+│   ├── package.json
+│   └── vite.config.ts        # proxies /api → localhost:8001
+├── deploy/                   # All deployment files
+│   ├── Dockerfile            # Python API image
+│   ├── Dockerfile.embedding  # PubMedBERT embedding service
+│   ├── Dockerfile.frontend   # Node build → nginx
+│   ├── docker-compose.prod.yml
+│   └── nginx/nginx.conf      # SSE-aware reverse proxy config
+├── api.py                    # FastAPI SSE backend (port 8001)
+├── app.py                    # Legacy Streamlit app
+├── embedding_service.py      # PubMedBERT microservice (port 8000)
+├── data/
+│   ├── papers/               # Place PDFs here
+│   ├── chroma_db/
+│   ├── bm25/
+│   └── checkpoints.db        # SqliteSaver conversation history
+└── pyproject.toml
+```
+
+---
+
+## Setup
+
+### Prerequisites
+- Python 3.13+
+- Node.js 20+
+- `uv` (recommended) or `pip`
+
+### 1. Install Python dependencies
 
 ```bash
-uv run agent/rag/enhanced_paper_rag.py --index
+uv sync
 ```
-*This will chunk and embed the PDFs into `data/chroma_db`.*
 
-### 2. Run the Web Interface
-Start the Streamlit app:
+### 2. Configure environment
+
+Create `.env` in the project root:
+
+```env
+ZENMUX_API_KEY=...
+ZENMUX_BASE_URL=...          # defaults to https://api.zenmux.com/v1
+ROUTER_MODEL=gpt-4o-mini
+WORKER_MODEL=gpt-4o
+RAG_BACKEND=chroma           # or pinecone
+EMBEDDING_SERVICE_URL=http://localhost:8000/embed
+PINECONE_API_KEY=...         # only needed for Pinecone backend
+PINECONE_INDEX_NAME=paper-rag-index
+LANGCHAIN_API_KEY=...        # optional, enables LangSmith tracing
+```
+
+### 3. Install frontend dependencies
 
 ```bash
-streamlit run app.py
+cd frontend && npm install
 ```
-*Access the app at `http://localhost:8501`.*
 
-### 3. Example Queries
-*   **Database Lookup**: "What is the amino acid sequence of Hexokinase-1 from Homo sapiens?"
-*   **EC Info**: "What is the EC number for chalcone isomerase?"
-*   **Literature RAG**: "How can I improve the thermostability of hydrolases?"
-*   **Online Search**: "Find recent papers about 'Evo 2' on bioRxiv."
+---
 
-## 📂 Project Structure
+## Running Locally
 
-*   `app.py`: Main Streamlit application entry point.
-*   `agent/`: Core agent logic.
-    *   `enzyme_agent.py`: LangGraph agent definition and tool integration.
-    *   `rag/`: RAG implementation (PDF loading, chunking, retrieval).
-*   `mcp_servers/`: Modular tools (Model Context Protocol style).
-    *   `ec/`: EC number lookup tools.
-    *   `uniprot/`: UniProt API integration.
-    *   `biorxiv/`: BioRxiv/EuropePMC search tools.
-*   `data/`: Data storage.
-    *   `papers/`: Directory for your PDF files.
-    *   `chroma_db/`: Persisted vector database.
+Three processes are needed. Open three terminals from the project root:
 
-## 🤝 Contributing
-Feel free to open issues or submit pull requests for new tools (e.g., BRENDA, PDB integration) or improvements to the agent's reasoning capabilities.
+**Terminal 1 — Embedding microservice** (required for RAG):
+```bash
+python embedding_service.py
+# Serves PubMedBERT on http://localhost:8000
+```
+
+**Terminal 2 — FastAPI backend**:
+```bash
+uvicorn api:app --reload --port 8001
+```
+
+**Terminal 3 — React dev server**:
+```bash
+cd frontend && npm run dev
+# Opens http://localhost:5173
+# /api/* is proxied to the FastAPI backend automatically
+```
+
+### Index PDFs (one-time, after adding papers to `data/papers/`)
+
+```bash
+# ChromaDB (default)
+python -m agent.rag.rag_cli --backend chroma --index
+
+# Pinecone
+python -m agent.rag.rag_cli --backend pinecone --index
+
+# Force full reindex
+python -m agent.rag.rag_cli --backend chroma --index --reindex
+
+# Verify
+python -m agent.rag.rag_cli --backend chroma --search "RFDiffusion architecture"
+```
+
+---
+
+## Deployment (Docker, ~100 users)
+
+All deployment files live in `deploy/`. The recommended target is a **4 vCPU / 8 GB RAM** VM.
+
+```bash
+# From the project root
+docker compose -f deploy/docker-compose.prod.yml up -d --build
+
+# Index PDFs after first deploy
+docker compose -f deploy/docker-compose.prod.yml exec api \
+  python -m agent.rag.rag_cli --backend chroma --index
+```
+
+The compose stack:
+- **nginx** — serves the built React app as static files and reverse-proxies `/api/` to the FastAPI service (SSE buffering disabled)
+- **api** — 4 Gunicorn/Uvicorn workers, SQLite WAL for shared conversation state
+- **embedding-service** — PubMedBERT model, cached to a named volume
+
+See `deploy/nginx/nginx.conf` for SSL configuration notes.
+
+---
+
+## Example Queries
+
+| Type | Query |
+|------|-------|
+| Simple | "What's the EC number for chalcone isomerase?" |
+| Detailed | "Explain the catalytic mechanism of chymotrypsin" |
+| Structure | "Tell me about lysozyme" → opens 3D viewer automatically |
+| Research | "What is the model architecture of RFDiffusion?" |
+| UniProt | "Get the amino acid sequence of human hexokinase-1" |

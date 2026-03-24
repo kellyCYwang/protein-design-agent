@@ -32,12 +32,22 @@ services:
     env_file: ../.env
     environment:
       - EMBEDDING_SERVICE_URL=http://embedding-service:8000/embed
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - papers:/app/data/papers
       - indexes:/app/data
     depends_on:
       - embedding-service
+      - redis
     restart: unless-stopped
+
+  # ── Redis cache ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
 
   # ── PubMedBERT embedding microservice ─────────────
   embedding-service:
@@ -54,3 +64,4 @@ volumes:
   papers:
   indexes:
   model-cache:
+  redis-data:

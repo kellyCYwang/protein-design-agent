@@ -114,6 +114,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.22.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb" },
+]
+
+[[package]]
 name = "altair"
 version = "6.0.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -1163,6 +1172,18 @@ wheels = [
 ]
 
 [[package]]
+name = "gunicorn"
+version = "25.1.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/66/13/ef67f59f6a7896fdc2c1d62b5665c5219d6b0a9a1784938eb9a28e55e128/gunicorn-25.1.0.tar.gz", hash = "sha256:1426611d959fa77e7de89f8c0f32eed6aa03ee735f98c01efba3e281b1c47616" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/da/73/4ad5b1f6a2e21cf1e85afdaad2b7b1a933985e2f5d679147a1953aaa192c/gunicorn-25.1.0-py3-none-any.whl", hash = "sha256:d0b1236ccf27f72cfe14bce7caadf467186f19e865094ca84221424e839b8b8b" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -1929,6 +1950,20 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/98/76/55a18c59dedf39688d72c4b06af73a5e3ea0d1a01bc867b88fbf0659f203/langgraph_checkpoint-4.0.0.tar.gz", hash = "sha256:814d1bd050fac029476558d8e68d87bce9009a0262d04a2c14b918255954a624" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/4a/de/ddd53b7032e623f3c7bcdab2b44e8bf635e468f62e10e5ff1946f62c9356/langgraph_checkpoint-4.0.0-py3-none-any.whl", hash = "sha256:3fa9b2635a7c5ac28b338f631abf6a030c3b508b7b9ce17c22611513b589c784" },
+]
+
+[[package]]
+name = "langgraph-checkpoint-sqlite"
+version = "3.0.3"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "langgraph-checkpoint" },
+    { name = "sqlite-vec" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/04/61/40b7f8f29d6de92406e668c35265f409f57064907e31eae84ab3f2a3e3e1/langgraph_checkpoint_sqlite-3.0.3.tar.gz", hash = "sha256:438c234d37dabda979218954c9c6eb1db73bee6492c2f1d3a00552fe23fa34ed" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/a3/d8/84ef22ee1cc485c4910df450108fd5e246497379522b3c6cfba896f71bf6/langgraph_checkpoint_sqlite-3.0.3-py3-none-any.whl", hash = "sha256:02eb683a79aa6fcda7cd4de43861062a5d160dbbb990ef8a9fd76c979998a952" },
 ]
 
 [[package]]
@@ -3296,12 +3331,14 @@ dependencies = [
     { name = "docling" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
+    { name = "gunicorn" },
     { name = "ipython" },
     { name = "langchain" },
     { name = "langchain-community" },
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
     { name = "langgraph" },
+    { name = "langgraph-checkpoint-sqlite" },
     { name = "langsmith" },
     { name = "mistralai" },
     { name = "openai" },
@@ -3311,6 +3348,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "rank-bm25" },
+    { name = "redis" },
     { name = "requests" },
     { name = "sentence-transformers" },
     { name = "stmol" },
@@ -3328,12 +3366,14 @@ requires-dist = [
     { name = "docling", specifier = ">=2.0.0" },
     { name = "faiss-cpu", specifier = ">=1.13.2" },
     { name = "fastapi", specifier = ">=0.128.0" },
+    { name = "gunicorn", specifier = ">=22.0.0" },
     { name = "ipython", specifier = ">=9.9.0" },
     { name = "langchain", specifier = ">=1.2.7" },
     { name = "langchain-community", specifier = ">=0.4.1" },
     { name = "langchain-openai", specifier = ">=1.1.7" },
     { name = "langchain-text-splitters", specifier = ">=1.1.0" },
     { name = "langgraph", specifier = ">=1.0.7" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
     { name = "langsmith", specifier = ">=0.6.4" },
     { name = "mistralai", specifier = ">=1.10.0" },
     { name = "openai", specifier = ">=2.15.0" },
@@ -3343,6 +3383,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
+    { name = "redis", specifier = ">=5.0.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "sentence-transformers", specifier = ">=5.2.0" },
     { name = "stmol", specifier = ">=0.0.9" },
@@ -4032,6 +4073,15 @@ wheels = [
 ]
 
 [[package]]
+name = "redis"
+version = "7.3.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/da/82/4d1a5279f6c1251d3d2a603a798a1137c657de9b12cfc1fba4858232c4d2/redis-7.3.0.tar.gz", hash = "sha256:4d1b768aafcf41b01022410b3cc4f15a07d9b3d6fe0c66fc967da2c88e551034" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/f0/28/84e57fce7819e81ec5aa1bd31c42b89607241f4fb1a3ea5b0d2dbeaea26c/redis-7.3.0-py3-none-any.whl", hash = "sha256:9d4fcb002a12a5e3c3fbe005d59c48a2cc231f87fbb2f6b70c2d89bb64fec364" },
+]
+
+[[package]]
 name = "referencing"
 version = "0.37.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -4572,6 +4622,18 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/33/75/f28622ba6dde79cd545055ea7bd4062dc934e0621f7b3be2891f8563f8de/sqlalchemy-2.0.46-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:ff33c6e6ad006bbc0f34f5faf941cfc62c45841c64c0a058ac38c799f15b5ede" },
     { url = "https://mirrors.aliyun.com/pypi/packages/a9/42/4afecbbc38d5e99b18acef446453c76eec6fbd03db0a457a12a056836e22/sqlalchemy-2.0.46-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:82ec52100ec1e6ec671563bbd02d7c7c8d0b9e71a0723c72f22ecf52d1755330" },
     { url = "https://mirrors.aliyun.com/pypi/packages/fc/a1/9c4efa03300926601c19c18582531b45aededfb961ab3c3585f1e24f120b/sqlalchemy-2.0.46-py3-none-any.whl", hash = "sha256:f9c11766e7e7c0a2767dda5acb006a118640c9fc0a4104214b96269bfb78399e" },
+]
+
+[[package]]
+name = "sqlite-vec"
+version = "0.1.7"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/b7/50/7ad59cfd3003a2110cc366e526293de4c2520486f5ddaa8dc78b265f8d3e/sqlite_vec-0.1.7-py3-none-macosx_10_6_x86_64.whl", hash = "sha256:c34a136caecff4ae17d4c0cc268fcda89764ee870039caa21431e8e3fb2f4d48" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/e6/c9/1cd2f59b539096cd2ce6b540247b2dfe3c47ba04d9368b5e8e3dc86498d4/sqlite_vec-0.1.7-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6d272593d1b45ec7ea289b160ee6e5fafbaa6e1f5ba15f1305c012b0bda43653" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/75/91/30c3c382140dcc7bc6e3a07eac7ca610a2b5b70eb9bc7066dc3e7f748d58/sqlite_vec-0.1.7-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8d27746d8e254a390bd15574aed899a0b9bb915b5321eb130a9c09722898cc03" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/59/56/6ff304d917ee79da769708dad0aed5fd34c72cbd0ae5e38bcc56cdc652a4/sqlite_vec-0.1.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl", hash = "sha256:ad654283cb9c059852ce2d82018c757b06a705ada568f8b126022a131189818e" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8b/27/fb1b6e3f9072854fe405f7aa99c46d4b465e84c9cec2ff7778edf29ecbbd/sqlite_vec-0.1.7-py3-none-win_amd64.whl", hash = "sha256:0c67877a87cb49426237b950237e82dbeb77778ab2ba89bea859f391fd169382" },
 ]
 
 [[package]]

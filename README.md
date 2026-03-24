@@ -2,6 +2,8 @@
 
 An AI-powered assistant for protein engineering and enzyme design research. Integrates **RAG (Retrieval-Augmented Generation)** with **agentic workflows** (LangGraph) and a modern React interface for querying protein databases, searching literature, and visualizing 3D structures.
 
+![Protein Design Agent UI v1.3](public/images/imagev1.3.png)
+
 ---
 
 ## Features
@@ -45,6 +47,15 @@ A custom React/TypeScript/Vite UI replaces the previous Streamlit app, served th
   - Click any residue to highlight it in the 3D view with a gold sphere overlay
 - Persistent conversation memory via `SqliteSaver` (per session `thread_id`)
 
+### Redis Caching
+Two-tier caching system that speeds up repeated and similar queries:
+
+- **Tool call caching** — external API results (UniProt, PDB, arXiv, bioRxiv, EC) are cached in Redis with per-tool TTLs (1–30 days). Shared across all Gunicorn workers.
+- **Query-level caching** — full agent responses are cached and matched by exact text or semantic similarity (cosine ≥ 0.95 via PubMedBERT embeddings). Similar rephrased queries return instantly.
+- **Graceful degradation** — if Redis is unavailable, the agent works normally without caching.
+- **Admin endpoints** — `GET /api/cache/stats` for hit/miss metrics, `POST /api/cache/clear` to flush cache.
+- **Auto-invalidation** — RAG cache entries are cleared automatically when PDFs are re-indexed.
+
 ---
 
 ## Technology Stack
@@ -52,7 +63,7 @@ A custom React/TypeScript/Vite UI replaces the previous Streamlit app, served th
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 18, TypeScript, Vite |
-| Styling | Pure CSS (IBM Plex Mono + Cormorant Garamond) |
+| Styling | Pure CSS (Fraunces + DM Sans + JetBrains Mono) |
 | 3D Viewer | 3Dmol.js (CDN) |
 | API server | FastAPI + Uvicorn/Gunicorn (SSE streaming) |
 | Agent | LangGraph `StateGraph`, `SqliteSaver` checkpointer |
@@ -61,6 +72,7 @@ A custom React/TypeScript/Vite UI replaces the previous Streamlit app, served th
 | RAG — cloud | Pinecone + BM25 |
 | Embeddings | PubMedBERT microservice (FastAPI, port 8000) |
 | PDF processing | Docling → Markdown |
+| Caching | Redis (tool results + query-level semantic dedup) |
 | Observability | LangSmith (optional) |
 
 ---
@@ -71,6 +83,7 @@ A custom React/TypeScript/Vite UI replaces the previous Streamlit app, served th
 protein-design-agent/
 ├── agent/
 │   ├── agent.py              # LangGraph StateGraph + query routing
+│   ├── cache.py              # Redis caching (tool results + query dedup)
 │   ├── skills/               # Markdown skill files (auto-discovered)
 │   └── rag/
 │       ├── chroma_rag.py
@@ -143,6 +156,8 @@ EMBEDDING_SERVICE_URL=http://localhost:8000/embed
 PINECONE_API_KEY=...         # only needed for Pinecone backend
 PINECONE_INDEX_NAME=paper-rag-index
 LANGCHAIN_API_KEY=...        # optional, enables LangSmith tracing
+REDIS_URL=redis://localhost:6379/0  # optional, enables caching
+CACHE_SIMILARITY_THRESHOLD=0.95     # optional, cosine threshold for query dedup
 ```
 
 ### 3. Install frontend dependencies
@@ -154,6 +169,12 @@ cd frontend && npm install
 ---
 
 ## Running Locally
+
+**Optional — Start Redis** (for caching, not required):
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+# Or: brew services start redis
+```
 
 Three processes are needed. Open three terminals from the project root:
 
@@ -209,6 +230,7 @@ docker compose -f deploy/docker-compose.prod.yml exec api \
 The compose stack:
 - **nginx** — serves the built React app as static files and reverse-proxies `/api/` to the FastAPI service (SSE buffering disabled)
 - **api** — 4 Gunicorn/Uvicorn workers, SQLite WAL for shared conversation state
+- **redis** — shared cache for tool results and query dedup (256 MB, LRU eviction)
 - **embedding-service** — PubMedBERT model, cached to a named volume
 
 See `deploy/nginx/nginx.conf` for SSL configuration notes.

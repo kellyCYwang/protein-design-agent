@@ -1,39 +1,40 @@
 /* ═══════════════════════════════════════════════
    NeoBinder — Protein Design Agent UI
-   Aesthetic: Precision Biolab
+   Aesthetic: Warm Ivory Lab
    ─────────────────────────────────────────────
-   Fonts: Cormorant Garamond (display) × IBM Plex Mono (mono)
-   Palette: Near-black + bioluminescent green + electric blue
+   Fonts: Fraunces (display) × DM Sans (body) × JetBrains Mono (mono)
+   Palette: Warm ivory + deep teal + burnt sienna
    ═══════════════════════════════════════════════ */
 
 /* ─── VARIABLES ─────────────────────────────────── */
 :root {
   /* Background layers */
-  --bg:        #07090F;
-  --surface:   #0D1421;
-  --elevated:  #132030;
-  --raised:    #1A2940;
+  --bg:        #FAF8F5;
+  --surface:   #FFFFFF;
+  --elevated:  #F2EFEB;
+  --raised:    #E8E4DF;
 
   /* Borders */
-  --border:       #1C2E45;
-  --border-hi:    #2A4060;
+  --border:       #DDD8D0;
+  --border-hi:    #C8C1B7;
 
   /* Brand accents */
-  --accent:     #00D97E;
-  --accent-dim: rgba(0, 217, 126, 0.12);
-  --accent-2:   #0096FF;
-  --accent-2-dim: rgba(0, 150, 255, 0.12);
-  --warm:       #FF8C42;
-  --danger:     #FF4757;
+  --accent:     #0C7B7D;
+  --accent-dim: rgba(12, 123, 125, 0.10);
+  --accent-2:   #D4613B;
+  --accent-2-dim: rgba(212, 97, 59, 0.10);
+  --warm:       #D4613B;
+  --danger:     #C0392B;
 
   /* Text */
-  --text:   #D8E4F0;
-  --muted:  #6B82A0;
-  --dim:    #3A4E66;
+  --text:   #2D2A26;
+  --muted:  #7A7267;
+  --dim:    #B0A99F;
 
   /* Typography */
-  --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-mono:    'IBM Plex Mono', 'Menlo', 'Consolas', monospace;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body:    'DM Sans', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Menlo', monospace;
 
   /* Layout */
   --sidebar-w: 264px;
@@ -59,7 +60,7 @@ html, body, #root {
 }
 
 body {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: 13px;
   line-height: 1.65;
   color: var(--text);
@@ -80,10 +81,6 @@ body {
   height: 100vh;
   overflow: hidden;
   background: var(--bg);
-  /* Dot-grid: evokes lab graph paper */
-  background-image: radial-gradient(var(--border) 1px, transparent 0);
-  background-size: 20px 20px;
-  background-position: 0 0;
 }
 
 .app__main {
@@ -98,30 +95,13 @@ body {
 .sidebar {
   width: var(--sidebar-w);
   flex-shrink: 0;
-  background: linear-gradient(160deg, #0D1421 0%, #091018 100%);
+  background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   position: relative;
   z-index: 10;
-}
-
-/* Accent glow on right edge */
-.sidebar::after {
-  content: '';
-  position: absolute;
-  inset: 0 0 0 auto;
-  width: 1px;
-  background: linear-gradient(
-    to bottom,
-    transparent 0%,
-    var(--accent) 30%,
-    var(--accent) 70%,
-    transparent 100%
-  );
-  opacity: 0.12;
-  pointer-events: none;
 }
 
 .sidebar__brand {
@@ -145,7 +125,7 @@ body {
 .sidebar__name {
   font-family: var(--font-display);
   font-size: 24px;
-  font-weight: 400;
+  font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--text);
   line-height: 1;
@@ -153,10 +133,11 @@ body {
 
 .sidebar__tagline {
   margin-top: 3px;
+  font-family: var(--font-body);
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--dim);
+  color: var(--muted);
 }
 
 .sidebar__actions {
@@ -181,7 +162,7 @@ body {
 }
 
 .sidebar__btn:hover {
-  background: rgba(0, 217, 126, 0.2);
+  background: rgba(12, 123, 125, 0.15);
 }
 
 .sidebar__btn-icon {
@@ -268,8 +249,8 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,217,126,0.4); }
-  50%       { opacity: 0.7; box-shadow: 0 0 0 4px rgba(0,217,126,0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(12,123,125,0.4); }
+  50%       { opacity: 0.7; box-shadow: 0 0 0 4px rgba(12,123,125,0); }
 }
 
 .sidebar__footer-text {
@@ -335,12 +316,12 @@ body {
 .pipeline__node--done {
   border-color: var(--accent);
   background: var(--accent);
-  color: var(--bg);
+  color: #FFFFFF;
 }
 
 @keyframes node-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0,217,126,0.3); }
-  50%       { box-shadow: 0 0 0 5px rgba(0,217,126,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(12,123,125,0.3); }
+  50%       { box-shadow: 0 0 0 5px rgba(12,123,125,0); }
 }
 
 .pipeline__label {
@@ -416,9 +397,8 @@ body {
 
 .chat__empty-title {
   font-family: var(--font-display);
-  font-style: italic;
   font-size: 22px;
-  font-weight: 300;
+  font-weight: 500;
   color: var(--muted);
 }
 
@@ -445,8 +425,8 @@ body {
 
 .chat__input {
   width: 100%;
-  background: var(--elevated);
-  border: 1px solid var(--border-hi);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 11px 14px;
   padding-bottom: 24px;
@@ -503,7 +483,7 @@ body {
 
 .chat__send:hover:not(:disabled) {
   background: var(--accent);
-  color: var(--bg);
+  color: #FFFFFF;
 }
 
 .chat__send:active:not(:disabled) {
@@ -562,19 +542,19 @@ body {
 .message__badge--simple {
   color: var(--accent-2);
   background: var(--accent-2-dim);
-  border: 1px solid rgba(0,150,255,0.25);
+  border: 1px solid rgba(212, 97, 59, 0.25);
 }
 
 .message__badge--detailed {
   color: var(--accent);
   background: var(--accent-dim);
-  border: 1px solid rgba(0,217,126,0.25);
+  border: 1px solid rgba(12, 123, 125, 0.25);
 }
 
 .message__badge--research {
-  color: var(--warm);
-  background: rgba(255,140,66,0.1);
-  border: 1px solid rgba(255,140,66,0.25);
+  color: #B7791F;
+  background: rgba(183, 121, 31, 0.10);
+  border: 1px solid rgba(183, 121, 31, 0.25);
 }
 
 .message__tools {
@@ -679,7 +659,7 @@ body {
 
 .message__pdb-btn:hover {
   background: var(--accent);
-  color: var(--bg);
+  color: #FFFFFF;
 }
 
 .message__pdb-btn:active { transform: scale(0.95); }
@@ -693,7 +673,7 @@ body {
   font-family: var(--font-mono);
   font-size: 11.5px;
   background: var(--accent-dim);
-  border: 1px solid rgba(0,217,126,0.3);
+  border: 1px solid rgba(12, 123, 125, 0.3);
   padding: 1px 5px;
   border-radius: 3px;
   color: var(--accent);
@@ -702,7 +682,7 @@ body {
 }
 
 .message__pdb-inline:hover {
-  background: rgba(0, 217, 126, 0.25);
+  background: rgba(12, 123, 125, 0.20);
   text-decoration: underline;
 }
 
@@ -731,14 +711,14 @@ body {
 .message__markdown p { margin-bottom: 10px; }
 
 .message__markdown a {
-  color: var(--accent-2);
+  color: var(--accent);
   text-decoration: none;
-  border-bottom: 1px solid rgba(0,150,255,0.35);
+  border-bottom: 1px solid rgba(12, 123, 125, 0.35);
   transition: border-color var(--dur);
 }
 
 .message__markdown a:hover {
-  border-color: var(--accent-2);
+  border-color: var(--accent);
 }
 
 .message__markdown code {
@@ -1025,27 +1005,27 @@ body {
 
 /* Residue type colors */
 .seq-viewer__residue--hydrophobic {
-  background: rgba(255, 140, 66, 0.18);
-  color: #FF8C42;
-  border-color: rgba(255, 140, 66, 0.25);
+  background: rgba(212, 97, 59, 0.15);
+  color: #B5432A;
+  border-color: rgba(212, 97, 59, 0.25);
 }
 
 .seq-viewer__residue--polar {
-  background: rgba(0, 217, 126, 0.12);
-  color: #00D97E;
-  border-color: rgba(0, 217, 126, 0.2);
+  background: rgba(12, 123, 125, 0.12);
+  color: #0C7B7D;
+  border-color: rgba(12, 123, 125, 0.2);
 }
 
 .seq-viewer__residue--charged-pos {
-  background: rgba(0, 150, 255, 0.15);
-  color: #0096FF;
-  border-color: rgba(0, 150, 255, 0.25);
+  background: rgba(41, 98, 168, 0.15);
+  color: #2962A8;
+  border-color: rgba(41, 98, 168, 0.25);
 }
 
 .seq-viewer__residue--charged-neg {
-  background: rgba(255, 71, 87, 0.15);
-  color: #FF4757;
-  border-color: rgba(255, 71, 87, 0.25);
+  background: rgba(192, 57, 43, 0.15);
+  color: #C0392B;
+  border-color: rgba(192, 57, 43, 0.25);
 }
 
 .seq-viewer__residue--special {
@@ -1056,8 +1036,8 @@ body {
 
 /* Selected residue: gold ring */
 .seq-viewer__residue--selected {
-  border-color: #FFD700 !important;
-  box-shadow: 0 0 0 1px #FFD700, 0 0 6px rgba(255, 215, 0, 0.4);
+  border-color: #B7791F !important;
+  box-shadow: 0 0 0 1px #B7791F, 0 0 6px rgba(183, 121, 31, 0.4);
   transform: scaleY(1.15);
 }
 
@@ -1084,7 +1064,7 @@ body {
 }
 
 .seq-viewer__info-sel {
-  color: #FFD700;
+  color: #B7791F;
   font-weight: 500;
 }
 

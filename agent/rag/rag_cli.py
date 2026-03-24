@@ -164,7 +164,17 @@ Environment Variables:
         print(f"INDEXING PDFs")
         print(f"{'='*60}")
         rag.index_local_pdfs(reindex=args.reindex)
-        
+
+        # Invalidate RAG-related cache entries
+        try:
+            from agent.cache import get_cache
+            cache = get_cache()
+            if cache.connected:
+                count = cache.invalidate_rag_cache()
+                print(f"Cleared {count} stale RAG cache entries")
+        except Exception as e:
+            print(f"Note: Could not clear cache ({e})")
+
     elif args.search:
         print(f"\n{'='*60}")
         print(f"SEARCH: {args.search}")

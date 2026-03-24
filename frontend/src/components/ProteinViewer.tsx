@@ -165,7 +165,7 @@ export function ProteinViewer({ pdbId, onClose }: Props) {
       try {
         if (!viewerRef.current) {
           viewerRef.current = window.$3Dmol.createViewer(canvasRef.current, {
-            backgroundColor: '#07090F',
+            backgroundColor: '#FAF8F5',
             antialias: true,
           })
         } else {

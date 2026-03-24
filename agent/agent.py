@@ -7,7 +7,6 @@ bioRxiv, UniProt, EC, and PDB lookups.
 """
 
 from typing import TypedDict, Annotated, Union
-from functools import lru_cache
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -31,6 +30,7 @@ from mcp_servers.uniprot.server import UniProtMCPServer
 # Import RAG backends
 from agent.rag.chroma_rag import ChromaPDFRAG
 from agent.rag.pinecone_rag import PineconePDFRAG
+from agent.cache import cached_tool_call
 
 # Initialize MCP servers
 ec_server = ECMCPServer()
@@ -48,50 +48,36 @@ dotenv.load_dotenv()
 # ============================================
 
 
-@lru_cache(maxsize=256)
-def _cached_ec_lookup(enzyme_name: str):
-    """Cached wrapper around EC lookup by name."""
-    normalized = enzyme_name.strip()
-    return ec_server.get_ec_number_by_name(normalized)
-
-
-@lru_cache(maxsize=256)
-def _cached_structure_lookup(enzyme_name: str):
-    """Cached wrapper around PDB structure search."""
-    normalized = enzyme_name.strip()
-    return pdb_server.search_structure(normalized, max_results=1)
-
 @tool
 def get_ec_number(enzyme_name: str) -> str:
     """Get EC number for an enzyme. Use for simple lookups."""
-    results = _cached_ec_lookup(enzyme_name)
-    if results:
-        # Return the best match (first result)
-        best = results[0]
-        enzyme_names = best.get('enzyme_names', [])
-        name_str = enzyme_names[0] if enzyme_names else enzyme_name
-        sources = ", ".join(best.get('sources', []))
-        return f"EC {best['ec_number']} for {name_str} (Source: {sources})"
-    return f"EC number not found for {enzyme_name}"
+    def _call():
+        results = ec_server.get_ec_number_by_name(enzyme_name.strip())
+        if results:
+            best = results[0]
+            enzyme_names = best.get('enzyme_names', [])
+            name_str = enzyme_names[0] if enzyme_names else enzyme_name
+            sources = ", ".join(best.get('sources', []))
+            return f"EC {best['ec_number']} for {name_str} (Source: {sources})"
+        return f"EC number not found for {enzyme_name}"
+    return cached_tool_call("get_ec_number", _call, enzyme_name=enzyme_name)
 
 
 @tool
 def get_enzyme_structure(enzyme_name: str) -> str:
     """Get 3D structure information for an enzyme."""
-    # First search for PDB IDs associated with the enzyme name (cached)
-    results = _cached_structure_lookup(enzyme_name)
-    
-    if results and "error" not in results[0]:
-        best = results[0]
-        pdb_id = best.get("pdb_id", "Unknown")
-        title = best.get("title", "No title")
-        resolution = best.get("resolution", "N/A")
-        method = best.get("method", "Unknown")
-        organism = ", ".join(best.get("organism", []))
-        
-        return f"PDB ID: {pdb_id}, Resolution: {resolution} Å, Organism: {organism}, Method: {method}, Title: {title}"
-    
-    return f"Structure not found for {enzyme_name}"
+    def _call():
+        results = pdb_server.search_structure(enzyme_name.strip(), max_results=1)
+        if results and "error" not in results[0]:
+            best = results[0]
+            pdb_id = best.get("pdb_id", "Unknown")
+            title = best.get("title", "No title")
+            resolution = best.get("resolution", "N/A")
+            method = best.get("method", "Unknown")
+            organism = ", ".join(best.get("organism", []))
+            return f"PDB ID: {pdb_id}, Resolution: {resolution} Å, Organism: {organism}, Method: {method}, Title: {title}"
+        return f"Structure not found for {enzyme_name}"
+    return cached_tool_call("get_enzyme_structure", _call, enzyme_name=enzyme_name)
 
 
 # @tool
@@ -121,33 +107,35 @@ def search_arxiv_papers(query: str, max_results: int = 5) -> str:
     for biology, or related topics. Returns paper titles, abstracts, authors, and URLs.
     Use for finding recent research publications and methods.
     """
-    results = arxiv_server.search_papers(query, max_results=max_results)
-    
-    if isinstance(results, dict) and "error" in results:
-        return f"arXiv search failed: {results['error']}"
-    
-    if not results:
-        return "No arXiv papers found for this query."
-    
-    lines = []
-    for i, paper in enumerate(results, 1):
-        title = paper.get("title", "Unknown")
-        authors = ", ".join(paper.get("authors", [])[:3])
-        if len(paper.get("authors", [])) > 3:
-            authors += " et al."
-        published = paper.get("published", "")
-        abstract = paper.get("abstract", "")[:300] + "..." if len(paper.get("abstract", "")) > 300 else paper.get("abstract", "")
-        url = paper.get("url", "")
-        
-        lines.append(
-            f"[{i}] {title}\n"
-            f"    Authors: {authors}\n"
-            f"    Published: {published}\n"
-            f"    URL: {url}\n"
-            f"    Abstract: {abstract}\n"
-        )
-    
-    return "\n".join(lines).strip()
+    def _call():
+        results = arxiv_server.search_papers(query, max_results=max_results)
+
+        if isinstance(results, dict) and "error" in results:
+            return f"arXiv search failed: {results['error']}"
+
+        if not results:
+            return "No arXiv papers found for this query."
+
+        lines = []
+        for i, paper in enumerate(results, 1):
+            title = paper.get("title", "Unknown")
+            authors = ", ".join(paper.get("authors", [])[:3])
+            if len(paper.get("authors", [])) > 3:
+                authors += " et al."
+            published = paper.get("published", "")
+            abstract = paper.get("abstract", "")[:300] + "..." if len(paper.get("abstract", "")) > 300 else paper.get("abstract", "")
+            url = paper.get("url", "")
+
+            lines.append(
+                f"[{i}] {title}\n"
+                f"    Authors: {authors}\n"
+                f"    Published: {published}\n"
+                f"    URL: {url}\n"
+                f"    Abstract: {abstract}\n"
+            )
+
+        return "\n".join(lines).strip()
+    return cached_tool_call("search_arxiv_papers", _call, query=query, max_results=max_results)
 
 
 @tool
@@ -155,32 +143,33 @@ def search_preprints(query: str, max_results: int = 5, source: str = "all") -> s
     """
     Search bioRxiv/medRxiv and related databases for preprints on enzyme/protein design.
     Also searches RCSB PDB for structure-related papers.
-    
+
     Args:
         query: Search keywords (e.g., 'chalcone isomerase', 'de novo design')
         max_results: Maximum number of results
         source: 'all', 'europepmc', 'rcsb', or 'biorxiv'
     """
-    results = biorxiv_server.integrated_search(query, max_results=max_results, source=source)
-    
-    if not results:
-        return "No preprints found for this query."
-    
-    lines = []
-    for i, paper in enumerate(results, 1):
-        title = paper.get("title", "Unknown")
-        authors = paper.get("authors", "Unknown")
-        doi = paper.get("doi", "")
-        pub_source = paper.get("source", "")
-        method = paper.get("search_method", "")
-        pdb_id = paper.get("related_pdb", "")
-        
-        line = f"[{i}] {title}\n    Authors: {authors}\n    DOI: {doi}\n    Source: {pub_source}"
-        if pdb_id:
-            line += f"\n    Related PDB: {pdb_id}"
-        lines.append(line + "\n")
-    
-    return "\n".join(lines).strip()
+    def _call():
+        results = biorxiv_server.integrated_search(query, max_results=max_results, source=source)
+
+        if not results:
+            return "No preprints found for this query."
+
+        lines = []
+        for i, paper in enumerate(results, 1):
+            title = paper.get("title", "Unknown")
+            authors = paper.get("authors", "Unknown")
+            doi = paper.get("doi", "")
+            pub_source = paper.get("source", "")
+            pdb_id = paper.get("related_pdb", "")
+
+            line = f"[{i}] {title}\n    Authors: {authors}\n    DOI: {doi}\n    Source: {pub_source}"
+            if pdb_id:
+                line += f"\n    Related PDB: {pdb_id}"
+            lines.append(line + "\n")
+
+        return "\n".join(lines).strip()
+    return cached_tool_call("search_preprints", _call, query=query, max_results=max_results, source=source)
 
 
 @tool
@@ -188,39 +177,41 @@ def search_uniprot_proteins(query: str, max_results: int = 5, organism: str = No
     """
     Search UniProt for proteins by name, function, or keywords. Returns protein sequences,
     organism, EC numbers, and functional annotations.
-    
+
     Args:
         query: Search query (e.g., 'chalcone isomerase', 'thermostable lipase')
         max_results: Maximum number of results
         organism: Optional filter by organism (e.g., 'Homo sapiens', 'Escherichia coli')
     """
-    results = uniprot_server.search_proteins(query, max_results=max_results, organism=organism)
-    
-    if isinstance(results, dict) and "error" in results:
-        return f"UniProt search failed: {results['error']}"
-    
-    if not results:
-        return "No UniProt proteins found for this query."
-    
-    lines = []
-    for i, protein in enumerate(results, 1):
-        name = protein.get("protein_name", "Unknown")
-        uniprot_id = protein.get("uniprot_id", "")
-        org = protein.get("organism", "Unknown")
-        ec_nums = ", ".join(protein.get("ec_numbers", []))
-        length = protein.get("length", 0)
-        function = protein.get("function", "")[:200] + "..." if len(protein.get("function", "")) > 200 else protein.get("function", "")
-        sequence = protein.get("sequence", "")[:60] + "..." if len(protein.get("sequence", "")) > 60 else protein.get("sequence", "")
-        
-        line = f"[{i}] {name}\n    UniProt ID: {uniprot_id}\n    Organism: {org}\n    Length: {length} aa"
-        if ec_nums:
-            line += f"\n    EC: {ec_nums}"
-        if function:
-            line += f"\n    Function: {function}"
-        line += f"\n    Sequence: {sequence}\n"
-        lines.append(line)
-    
-    return "\n".join(lines).strip()
+    def _call():
+        results = uniprot_server.search_proteins(query, max_results=max_results, organism=organism)
+
+        if isinstance(results, dict) and "error" in results:
+            return f"UniProt search failed: {results['error']}"
+
+        if not results:
+            return "No UniProt proteins found for this query."
+
+        lines = []
+        for i, protein in enumerate(results, 1):
+            name = protein.get("protein_name", "Unknown")
+            uniprot_id = protein.get("uniprot_id", "")
+            org = protein.get("organism", "Unknown")
+            ec_nums = ", ".join(protein.get("ec_numbers", []))
+            length = protein.get("length", 0)
+            function = protein.get("function", "")[:200] + "..." if len(protein.get("function", "")) > 200 else protein.get("function", "")
+            sequence = protein.get("sequence", "")[:60] + "..." if len(protein.get("sequence", "")) > 60 else protein.get("sequence", "")
+
+            line = f"[{i}] {name}\n    UniProt ID: {uniprot_id}\n    Organism: {org}\n    Length: {length} aa"
+            if ec_nums:
+                line += f"\n    EC: {ec_nums}"
+            if function:
+                line += f"\n    Function: {function}"
+            line += f"\n    Sequence: {sequence}\n"
+            lines.append(line)
+
+        return "\n".join(lines).strip()
+    return cached_tool_call("search_uniprot_proteins", _call, query=query, max_results=max_results, organism=organism)
 
 
 @tool
@@ -229,41 +220,70 @@ def get_uniprot_protein_details(uniprot_id: str) -> str:
     Get detailed information about a specific protein by UniProt ID, including
     sequence, active sites, binding sites, and PDB structures.
     """
-    result = uniprot_server.get_protein_by_id(uniprot_id)
-    
-    if isinstance(result, dict) and "error" in result:
-        return f"Failed to get protein details: {result['error']}"
-    
-    lines = [
-        f"Protein: {result.get('protein_name', 'Unknown')}",
-        f"UniProt ID: {result.get('uniprot_id', '')}",
-        f"Organism: {result.get('organism', 'Unknown')}",
-        f"Length: {result.get('length', 0)} aa",
-        f"Mass: {result.get('mass', 'N/A')} Da",
-    ]
-    
-    ec_nums = result.get("ec_numbers", [])
-    if ec_nums:
-        lines.append(f"EC Numbers: {', '.join(ec_nums)}")
-    
-    function = result.get("function", "")
-    if function:
-        lines.append(f"Function: {function}")
-    
-    active_sites = result.get("active_sites", [])
-    if active_sites:
-        sites_str = "; ".join([f"Pos {s['position']}: {s['description']}" for s in active_sites[:5]])
-        lines.append(f"Active Sites: {sites_str}")
-    
-    pdb_ids = result.get("pdb_structures", [])
-    if pdb_ids:
-        lines.append(f"PDB Structures: {', '.join(pdb_ids)}")
-    
-    sequence = result.get("sequence", "")
-    if sequence:
-        lines.append(f"Sequence: {sequence[:100]}{'...' if len(sequence) > 100 else ''}")
-    
-    return "\n".join(lines)
+    def _call():
+        result = uniprot_server.get_protein_by_id(uniprot_id)
+
+        if isinstance(result, dict) and "error" in result:
+            return f"Failed to get protein details: {result['error']}"
+
+        lines = [
+            f"Protein: {result.get('protein_name', 'Unknown')}",
+            f"UniProt ID: {result.get('uniprot_id', '')}",
+            f"Organism: {result.get('organism', 'Unknown')}",
+            f"Length: {result.get('length', 0)} aa",
+            f"Mass: {result.get('mass', 'N/A')} Da",
+        ]
+
+        ec_nums = result.get("ec_numbers", [])
+        if ec_nums:
+            lines.append(f"EC Numbers: {', '.join(ec_nums)}")
+
+        function = result.get("function", "")
+        if function:
+            lines.append(f"Function: {function}")
+
+        active_sites = result.get("active_sites", [])
+        if active_sites:
+            sites_str = "; ".join([f"Pos {s['position']}: {s['description']}" for s in active_sites[:5]])
+            lines.append(f"Active Sites: {sites_str}")
+
+        pdb_ids = result.get("pdb_structures", [])
+        if pdb_ids:
+            lines.append(f"PDB Structures: {', '.join(pdb_ids)}")
+
+        sequence = result.get("sequence", "")
+        if sequence:
+            lines.append(f"Sequence: {sequence[:100]}{'...' if len(sequence) > 100 else ''}")
+
+        return "\n".join(lines)
+    return cached_tool_call("get_uniprot_protein_details", _call, uniprot_id=uniprot_id)
+
+
+@tool
+def load_skill(skill_name: str) -> str:
+    """
+    Load specialized skill instructions by skill name.
+
+    This enables progressive disclosure: the model can fetch detailed guidance
+    only when needed instead of always including every skill in the prompt.
+    """
+    normalized = (skill_name or "").strip().lower()
+    if not normalized:
+        return "Missing skill_name. Provide a registered skill key."
+
+    if normalized not in SKILL_REGISTRY:
+        available = ", ".join(sorted(SKILL_REGISTRY.keys())) or "(none)"
+        return (
+            f"Unknown skill '{skill_name}'. "
+            f"Available skills: {available}"
+        )
+
+    skill_meta = SKILL_REGISTRY[normalized]
+    header = (
+        f"# Skill: {normalized}\n"
+        f"Source file: {skill_meta.get('file', 'unknown')}\n\n"
+    )
+    return header + skill_meta["content"]
 
 
 # ============================================
@@ -446,34 +466,38 @@ def build_agent(model: str = "gpt-4o-mini", temperature: float = 0):
         protein design methods, structure improvement strategies, etc). Use for complex
         research questions where tools alone are insufficient.
         """
-        results = rag.search(query, top_k=top_k)
-        if not results:
-            return "No relevant local papers found."
+        def _call():
+            results = rag.search(query, top_k=top_k)
+            if not results:
+                return "No relevant local papers found."
 
-        lines: list[str] = []
-        for i, r in enumerate(results, 1):
-            title = r.get("title", "") or "Unknown title"
-            section = r.get("section", "") or "Unknown section"
-            filename = r.get("filename", "") or "Unknown file"
-            score = r.get("score", None)
-            content = r.get("content", "") or ""
-            if len(content) > 1500:
-                content = content[:1500] + "..."
-            score_str = f"{score:.4f}" if isinstance(score, (float, int)) else "N/A"
-            lines.append(
-                f"[{i}] Title: {title}\n"
-                f"    Section: {section}\n"
-                f"    File: {filename}\n"
-                f"    Score: {score_str}\n"
-                f"    Excerpt:\n{content}\n"
-            )
+            lines: list[str] = []
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "") or "Unknown title"
+                section = r.get("section", "") or "Unknown section"
+                filename = r.get("filename", "") or "Unknown file"
+                score = r.get("score", None)
+                content = r.get("content", "") or ""
+                if len(content) > 1500:
+                    content = content[:1500] + "..."
+                score_str = f"{score:.4f}" if isinstance(score, (float, int)) else "N/A"
+                lines.append(
+                    f"[{i}] Title: {title}\n"
+                    f"    Section: {section}\n"
+                    f"    File: {filename}\n"
+                    f"    Score: {score_str}\n"
+                    f"    Excerpt:\n{content}\n"
+                )
 
-        return "\n".join(lines).strip()
+            return "\n".join(lines).strip()
+        return cached_tool_call("search_research_papers", _call, query=query, top_k=top_k)
 
     tools = [
         # Core enzyme tools
         get_ec_number, 
         get_enzyme_structure, 
+        # On-demand skill loader
+        load_skill,
         # Local RAG tool
         search_research_papers,
         # Literature search tools (MCP servers)
@@ -635,7 +659,9 @@ Examples:
                         content=(
                             "You are an expert protein engineering assistant. "
                             "Use the available tools to answer the user's question "
-                            "thoroughly, and present your findings in well-structured markdown."
+                            "thoroughly, and present your findings in well-structured markdown. "
+                            "When a request needs specialized workflow instructions, call "
+                            "load_skill(skill_name) before proceeding."
                         )
                     )
                 )

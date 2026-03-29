@@ -16,7 +16,7 @@ function detectPdbId(text: string): string | null {
 }
 
 export default function App() {
-  const { messages, status, isStreaming, send, reset } = useChat()
+  const { messages, status, isStreaming, send, cancel, reset } = useChat()
   const [activePdbId, setActivePdbId] = useState<string | null>(null)
   const [showViewer, setShowViewer] = useState(false)
 
@@ -51,6 +51,7 @@ export default function App() {
           messages={messages}
           isStreaming={isStreaming}
           onSend={send}
+          onCancel={cancel}
           onPdbOpen={handlePdbOpen}
         />
       </div>

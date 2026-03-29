@@ -7,6 +7,48 @@ export function useChat() {
   const [status, setStatus] = useState<AgentStatus>({ stage: 'idle' })
   const [isStreaming, setIsStreaming] = useState(false)
   const threadIdRef = useRef<string>(uuidv4())
+  const abortRef = useRef<AbortController | null>(null)
+
+  const cancel = useCallback(async () => {
+    // 1. Abort the fetch (closes the SSE stream client-side)
+    abortRef.current?.abort()
+    abortRef.current = null
+
+    // 2. Tell the backend to stop the agent thread
+    try {
+      await fetch('/api/chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thread_id: threadIdRef.current }),
+      })
+    } catch {
+      // Best-effort — backend may already be done
+    }
+
+    // 3. Update UI state
+    setIsStreaming(false)
+    setStatus({ stage: 'idle' })
+
+    // 4. Mark the last assistant message as cancelled
+    setMessages(prev => {
+      const last = prev[prev.length - 1]
+      if (last?.role === 'assistant' && !last.content) {
+        // Empty placeholder — replace with cancelled notice
+        return [
+          ...prev.slice(0, -1),
+          { ...last, content: '*Query cancelled.*' },
+        ]
+      }
+      if (last?.role === 'assistant') {
+        // Partial response — append cancellation note
+        return [
+          ...prev.slice(0, -1),
+          { ...last, content: last.content + '\n\n*— cancelled*' },
+        ]
+      }
+      return prev
+    })
+  }, [])
 
   const send = useCallback(
     async (content: string) => {
@@ -33,11 +75,16 @@ export function useChat() {
         { id: assistantId, role: 'assistant', content: '', timestamp: new Date() },
       ])
 
+      // Create abort controller for this request
+      const abortController = new AbortController()
+      abortRef.current = abortController
+
       try {
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: content, thread_id: threadIdRef.current }),
+          signal: abortController.signal,
         })
 
         if (!response.ok) {
@@ -91,6 +138,9 @@ export function useChat() {
                       ),
                     )
                     break
+                  case 'cancelled':
+                    setStatus({ stage: 'idle' })
+                    break
                   case 'done':
                     setStatus({ stage: 'done' })
                     break
@@ -113,12 +163,17 @@ export function useChat() {
           }
         }
       } catch (err) {
+        // Don't show errors for intentional aborts
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return
+        }
         const msg = err instanceof Error ? err.message : 'Unknown error'
         setStatus({ stage: 'error', errorMessage: msg })
         setMessages(prev =>
           prev.map(m => (m.id === assistantId ? { ...m, content: `**Error:** ${msg}` } : m)),
         )
       } finally {
+        abortRef.current = null
         setIsStreaming(false)
         setTimeout(() => setStatus({ stage: 'idle' }), 3000)
       }
@@ -127,6 +182,9 @@ export function useChat() {
   )
 
   const reset = useCallback(() => {
+    // Cancel any in-flight request before resetting
+    abortRef.current?.abort()
+    abortRef.current = null
     setMessages([])
     setStatus({ stage: 'idle' })
     setIsStreaming(false)
@@ -138,6 +196,7 @@ export function useChat() {
     status,
     isStreaming,
     send,
+    cancel,
     reset,
     threadId: threadIdRef.current,
   }

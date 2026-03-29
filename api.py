@@ -43,6 +43,8 @@ app.add_middleware(
 _agent = None
 _agent_lock = threading.Lock()
 _query_index: QueryEmbeddingIndex | None = None
+# Track active streams so they can be cancelled by thread_id
+_active_cancels: dict[str, threading.Event] = {}
 
 
 def get_agent():
@@ -63,6 +65,10 @@ def get_query_index() -> QueryEmbeddingIndex:
 
 class ChatRequest(BaseModel):
     message: str
+    thread_id: str
+
+
+class CancelRequest(BaseModel):
     thread_id: str
 
 
@@ -151,6 +157,10 @@ async def agent_event_stream(message: str, thread_id: str) -> AsyncGenerator[str
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
 
+    # Cancellation signal for this stream
+    cancel_event = threading.Event()
+    _active_cancels[thread_id] = cancel_event
+
     # Track response content and metadata for post-stream caching
     captured_response: list[str] = []
     captured_query_type: list[str] = ["detailed"]
@@ -163,9 +173,12 @@ async def agent_event_stream(message: str, thread_id: str) -> AsyncGenerator[str
                 {"messages": [("human", message)]},
                 {"configurable": {"thread_id": thread_id}},
             ):
+                if cancel_event.is_set():
+                    break
                 asyncio.run_coroutine_threadsafe(queue.put(("event", event)), loop)
         except Exception as exc:
-            asyncio.run_coroutine_threadsafe(queue.put(("error", str(exc))), loop)
+            if not cancel_event.is_set():
+                asyncio.run_coroutine_threadsafe(queue.put(("error", str(exc))), loop)
         finally:
             asyncio.run_coroutine_threadsafe(queue.put(("done", None)), loop)
 
@@ -175,58 +188,64 @@ async def agent_event_stream(message: str, thread_id: str) -> AsyncGenerator[str
     # Keep connection alive while waiting
     yield ": ping\n\n"
 
-    while True:
-        item = await queue.get()
-        kind, payload = item
+    try:
+        while True:
+            item = await queue.get()
+            kind, payload = item
 
-        if kind == "done":
-            yield _sse("done", {})
-            # Store in query cache (background thread, non-blocking)
-            if captured_response:
-                full_response = captured_response[-1]  # last response chunk is the complete one
-                threading.Thread(
-                    target=_store_query_cache,
-                    args=(message, captured_query_type[0], full_response, captured_tools),
-                    daemon=True,
-                ).start()
-            break
+            if kind == "done":
+                if cancel_event.is_set():
+                    yield _sse("cancelled", {"message": "Query cancelled"})
+                else:
+                    yield _sse("done", {})
+                    # Store in query cache (background thread, non-blocking)
+                    if captured_response:
+                        full_response = captured_response[-1]
+                        threading.Thread(
+                            target=_store_query_cache,
+                            args=(message, captured_query_type[0], full_response, captured_tools),
+                            daemon=True,
+                        ).start()
+                break
 
-        if kind == "error":
-            yield _sse("error", {"message": payload})
-            break
+            if kind == "error":
+                yield _sse("error", {"message": payload})
+                break
 
-        event = payload
+            event = payload
 
-        if "route_query" in event:
-            q = event["route_query"]
-            query_type = q.get("query_type", "unknown")
-            captured_query_type[0] = query_type
-            yield _sse("route", {
-                "query_type": query_type,
-                "skill_name": q.get("skill_name"),
-            })
+            if "route_query" in event:
+                q = event["route_query"]
+                query_type = q.get("query_type", "unknown")
+                captured_query_type[0] = query_type
+                yield _sse("route", {
+                    "query_type": query_type,
+                    "skill_name": q.get("skill_name"),
+                })
 
-        elif "rag_handler" in event:
-            yield _sse("status", {"message": "Searching research papers…"})
+            elif "rag_handler" in event:
+                yield _sse("status", {"message": "Searching research papers…"})
 
-        elif "tools" in event:
-            msgs = event["tools"].get("messages", [])
-            if msgs:
-                last = msgs[-1]
-                tool_name = last.name if hasattr(last, "name") else "tool"
-                captured_tools.append(tool_name)
-                yield _sse("tool", {"tool_name": tool_name})
+            elif "tools" in event:
+                msgs = event["tools"].get("messages", [])
+                if msgs:
+                    last = msgs[-1]
+                    tool_name = last.name if hasattr(last, "name") else "tool"
+                    captured_tools.append(tool_name)
+                    yield _sse("tool", {"tool_name": tool_name})
 
-        elif "simple_handler" in event or "detailed_handler" in event:
-            node = "simple_handler" if "simple_handler" in event else "detailed_handler"
-            msgs = event[node].get("messages", [])
-            if msgs:
-                last = msgs[-1]
-                has_content = hasattr(last, "content") and last.content
-                no_tool_calls = not (hasattr(last, "tool_calls") and last.tool_calls)
-                if has_content and no_tool_calls:
-                    captured_response.append(last.content)
-                    yield _sse("response", {"content": last.content})
+            elif "simple_handler" in event or "detailed_handler" in event:
+                node = "simple_handler" if "simple_handler" in event else "detailed_handler"
+                msgs = event[node].get("messages", [])
+                if msgs:
+                    last = msgs[-1]
+                    has_content = hasattr(last, "content") and last.content
+                    no_tool_calls = not (hasattr(last, "tool_calls") and last.tool_calls)
+                    if has_content and no_tool_calls:
+                        captured_response.append(last.content)
+                        yield _sse("response", {"content": last.content})
+    finally:
+        _active_cancels.pop(thread_id, None)
 
 
 # ── Routes ────────────────────────────────────────────
@@ -256,6 +275,16 @@ async def chat(req: ChatRequest):
             "Connection": "keep-alive",
         },
     )
+
+
+@app.post("/api/chat/cancel")
+async def cancel_chat(req: CancelRequest):
+    """Cancel an in-flight agent stream for the given thread_id."""
+    cancel_event = _active_cancels.get(req.thread_id)
+    if cancel_event is not None:
+        cancel_event.set()
+        return {"cancelled": True}
+    return {"cancelled": False, "reason": "no active stream for this thread"}
 
 
 @app.get("/api/health")

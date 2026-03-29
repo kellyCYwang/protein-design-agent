@@ -6,10 +6,11 @@ interface Props {
   messages: Message[]
   isStreaming: boolean
   onSend: (content: string) => void
+  onCancel: () => void
   onPdbOpen: (id: string) => void
 }
 
-export function ChatArea({ messages, isStreaming, onSend, onPdbOpen }: Props) {
+export function ChatArea({ messages, isStreaming, onSend, onCancel, onPdbOpen }: Props) {
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -40,6 +41,11 @@ export function ChatArea({ messages, isStreaming, onSend, onPdbOpen }: Props) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    }
+    // Escape to cancel while streaming
+    if (e.key === 'Escape' && isStreaming) {
+      e.preventDefault()
+      onCancel()
     }
   }
 
@@ -84,21 +90,33 @@ export function ChatArea({ messages, isStreaming, onSend, onPdbOpen }: Props) {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="Ask about an enzyme, reaction mechanism, or protein structure…"
+            placeholder={isStreaming ? 'Press Esc or click Stop to cancel…' : 'Ask about an enzyme, reaction mechanism, or protein structure…'}
             rows={1}
             disabled={isStreaming}
           />
-          <div className="chat__input-hint">↵ send &nbsp;·&nbsp; ⇧↵ newline</div>
+          <div className="chat__input-hint">
+            {isStreaming ? 'esc cancel' : '↵ send · ⇧↵ newline'}
+          </div>
         </div>
-        <button
-          className={`chat__send${isStreaming ? ' chat__send--loading' : ''}`}
-          onClick={handleSend}
-          disabled={isStreaming || !input.trim()}
-          aria-label="Send message"
-        >
-          {isStreaming ? (
-            <span className="spinner" />
-          ) : (
+        {isStreaming ? (
+          <button
+            className="chat__send chat__send--cancel"
+            onClick={onCancel}
+            aria-label="Cancel query"
+            title="Cancel query (Esc)"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <rect x="3" y="3" width="10" height="10" rx="1.5"
+                stroke="currentColor" strokeWidth="1.5" fill="currentColor" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            className="chat__send"
+            onClick={handleSend}
+            disabled={!input.trim()}
+            aria-label="Send message"
+          >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path
                 d="M2 8h12M10 4l4 4-4 4"
@@ -108,8 +126,8 @@ export function ChatArea({ messages, isStreaming, onSend, onPdbOpen }: Props) {
                 strokeLinejoin="round"
               />
             </svg>
-          )}
-        </button>
+          </button>
+        )}
       </div>
     </div>
   )

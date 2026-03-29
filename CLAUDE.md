@@ -9,9 +9,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync
 ```
 
-**Run the Streamlit app:**
+**Run the FastAPI backend:**
 ```bash
-streamlit run app.py
+uvicorn api:app --reload --port 8001
+```
+
+**Run the React/TypeScript frontend:**
+```bash
+cd frontend && npm run dev
+# Runs on port 5173, proxies /api to localhost:8001
 ```
 
 **Start the embedding microservice** (required before indexing or running RAG queries):
@@ -100,11 +106,19 @@ Each subdirectory (`ec/`, `pdb/`, `uniprot/`, `arxiv/`, `biorxiv/`) contains a `
 
 Skills are **Markdown files** in `agent/skills/`. At import time, `_build_skill_registry()` auto-discovers all `.md` files and derives snake_case keys (e.g., `EnzymeAnalysis.md` → `enzyme_analysis`). When the router selects a skill, its full Markdown content is injected as a `SystemMessage` into `detailed_handler`. Add new skills by dropping `.md` files in that directory — no code changes needed.
 
-### Streamlit UI (`app.py`)
+### FastAPI Backend (`api.py`)
 
-- Initializes the agent once per session via `build_agent()` stored in `st.session_state`.
-- Streams LangGraph events to update a live status indicator.
-- Auto-detects `PDB ID: XXXX` in responses and renders 3D structure via `stmol`/`py3Dmol`.
+- Streaming SSE endpoint at `POST /api/chat` that runs the LangGraph agent in a background thread and yields `route`, `status`, `tool`, `response`, `done`, and `error` events.
+- `POST /api/chat/cancel` signals cancellation for an active stream by `thread_id`.
+- Query-level caching (exact + semantic similarity) via Redis.
+
+### React/TypeScript Frontend (`frontend/`)
+
+- Vite + React 18 + TypeScript.
+- `useChat` hook manages SSE streaming, cancel via `AbortController` + backend cancel endpoint, and thread persistence.
+- `ChatArea` component with send/cancel button toggle and `Escape` key shortcut.
+- `ProteinViewer` renders interactive 3D structures via 3Dmol.js, auto-detected from `PDB ID: XXXX` patterns in responses.
+- `PipelineStatus` shows agent progress through Route → Research → Tool → Respond stages.
 
 ### Kubernetes (`k8s/`)
 

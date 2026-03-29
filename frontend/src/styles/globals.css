@@ -495,6 +495,18 @@ body {
   cursor: not-allowed;
 }
 
+.chat__send--cancel {
+  background: var(--danger);
+  color: #FFFFFF;
+  border-color: var(--danger);
+  opacity: 1;
+}
+
+.chat__send--cancel:hover {
+  background: #A93226;
+  color: #FFFFFF;
+}
+
 /* ─── MESSAGE ─────────────────────────────────────── */
 .message {
   display: flex;

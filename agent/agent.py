@@ -14,9 +14,12 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.sqlite import SqliteSaver
+import json
+import logging
 import sqlite3
 import sys
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add project root to path to import mcp_servers
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +33,7 @@ from mcp_servers.uniprot.server import UniProtMCPServer
 # Import RAG backends
 from agent.rag.chroma_rag import ChromaPDFRAG
 from agent.rag.pinecone_rag import PineconePDFRAG
-from agent.cache import cached_tool_call
+from agent.cache import cached_tool_call, get_query_cache, QueryCacheLayer
 
 # Initialize MCP servers
 ec_server = ECMCPServer()
@@ -333,6 +336,8 @@ class AgentState(TypedDict):
     skill_name: str  # key into SKILL_REGISTRY, or "" for no skill
     needs_rag: bool
     rag_context: str  # formatted context from retrieved papers (if any)
+    plan: str  # JSON-structured research plan for multi-step queries
+    gathered_context: str  # Pre-gathered tool results from parallel execution
 
 
 # ============================================
@@ -588,6 +593,10 @@ Examples:
             "query_type": query_type,
             "skill_name": skill_name,
             "needs_rag": query_type == "research",
+            # Clear stale context from previous turns to prevent leakage
+            "rag_context": "",
+            "plan": "",
+            "gathered_context": "",
         }
     
     
@@ -646,7 +655,40 @@ Examples:
                     )
                 )
             
-            # 2. Conditional skill injection — only if router selected one
+            # 2. Inject research plan and pre-gathered results
+            plan = (state.get("plan") or "").strip()
+            gathered = (state.get("gathered_context") or "").strip()
+
+            if plan or gathered:
+                plan_section = ""
+                if plan:
+                    try:
+                        plan_obj = json.loads(plan)
+                        plan_section = f"Research plan:\n{json.dumps(plan_obj, indent=2)}\n\n"
+                    except json.JSONDecodeError:
+                        pass
+
+                gathered_section = ""
+                if gathered:
+                    gathered_section = (
+                        "The following data was already gathered in parallel. "
+                        "Use it directly — do NOT re-call these tools. "
+                        "Call additional tools only for remaining dependent steps "
+                        "or follow-up questions.\n\n"
+                        f"--- Pre-gathered data ---\n{gathered}\n--- End pre-gathered data ---\n\n"
+                    )
+
+                if plan_section or gathered_section:
+                    system_msgs.append(
+                        SystemMessage(
+                            content=(
+                                f"{plan_section}{gathered_section}"
+                                "Synthesize all available data into a comprehensive answer."
+                            )
+                        )
+                    )
+
+            # 3. Conditional skill injection — only if router selected one
             skill_name = (state.get("skill_name") or "").strip()
             if skill_name and skill_name in SKILL_REGISTRY:
                 skill_content = SKILL_REGISTRY[skill_name]["content"]
@@ -661,7 +703,13 @@ Examples:
                             "Use the available tools to answer the user's question "
                             "thoroughly, and present your findings in well-structured markdown. "
                             "When a request needs specialized workflow instructions, call "
-                            "load_skill(skill_name) before proceeding."
+                            "load_skill(skill_name) before proceeding.\n\n"
+                            "IMPORTANT: When you mention a PDB structure, ALWAYS include it "
+                            "in the exact format 'PDB ID: XXXX' (e.g. 'PDB ID: 168L'). "
+                            "The UI has a built-in 3D molecular viewer that automatically "
+                            "detects this pattern and renders an interactive 3D structure. "
+                            "Do NOT tell the user to visit external websites to view structures — "
+                            "the structure will be displayed directly in the chat."
                         )
                     )
                 )
@@ -679,8 +727,164 @@ Examples:
             "rag_context": rag_context,
             "needs_rag": False,
         }
-    
-    
+
+    def plan_query(state: AgentState):
+        """Decompose complex queries into a structured multi-step research plan."""
+        last_message = state["messages"][-1].content
+        query_type = state["query_type"]
+
+        # Build concise tool catalog for the planner
+        tool_catalog = "\n".join(
+            f"  - {t.name}({', '.join(p for p in t.args if p != 'return')}): "
+            f"{t.description.splitlines()[0].strip()}"
+            for t in tools
+        )
+
+        research_note = (
+            "Local paper search (search_research_papers) runs automatically before "
+            "your plan executes — do NOT include it. Focus on other data sources."
+            if query_type == "research"
+            else "Include search_research_papers if the query benefits from local paper context."
+        )
+
+        prompt = f"""You are a research planner for a protein engineering AI assistant.
+Given a user's question, create a concise execution plan specifying which tools to call
+and in what order to gather all necessary data before synthesizing an answer.
+
+User query: "{last_message}"
+Query classification: {query_type}
+
+Available tools:
+{tool_catalog}
+
+{research_note}
+
+Respond with ONLY a JSON object:
+{{
+  "goal": "Brief statement of what we need to answer",
+  "steps": [
+    {{
+      "id": 1,
+      "tool": "tool_name",
+      "args": {{"param": "value"}},
+      "reason": "Why this data is needed",
+      "depends_on": []
+    }}
+  ]
+}}
+
+Rules:
+- 2-5 steps max. Don't over-plan.
+- Steps with empty depends_on can run in parallel later.
+- Use real tool names and argument names from the list above.
+- The AI synthesizes all gathered data — no "synthesize" step.
+- Output valid JSON only."""
+
+        response = router_llm.invoke(prompt)
+        plan_text = response.content.strip()
+
+        # Strip markdown code fences if present
+        if "```" in plan_text:
+            for block in plan_text.split("```")[1:]:
+                cleaned = block.strip()
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:].strip()
+                try:
+                    json.loads(cleaned)
+                    plan_text = cleaned
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        # Validate JSON; fall back to an empty plan on failure
+        try:
+            json.loads(plan_text)
+        except json.JSONDecodeError:
+            plan_text = json.dumps({"goal": last_message, "steps": []})
+
+        return {"plan": plan_text}
+
+    def parallel_gather(state: AgentState):
+        """Execute independent plan steps in parallel, collecting tool results."""
+        plan_text = (state.get("plan") or "").strip()
+        if not plan_text:
+            return {"gathered_context": ""}
+
+        try:
+            plan_obj = json.loads(plan_text)
+        except json.JSONDecodeError:
+            return {"gathered_context": ""}
+
+        steps = plan_obj.get("steps", [])
+        if not steps:
+            return {"gathered_context": ""}
+
+        # Build a lookup from tool name to the actual tool callable
+        tool_map = {t.name: t for t in tools}
+
+        # Identify independent steps (no dependencies)
+        independent = [s for s in steps if not s.get("depends_on")]
+        # Dependent steps will be left for the LLM to handle in detailed_handler
+        dependent = [s for s in steps if s.get("depends_on")]
+
+        logger = logging.getLogger(__name__)
+
+        def _run_step(step):
+            """Execute a single plan step by invoking the corresponding tool."""
+            tool_name = step.get("tool", "")
+            args = step.get("args", {})
+            reason = step.get("reason", "")
+
+            if tool_name not in tool_map:
+                return f"[Step {step.get('id', '?')}] Unknown tool: {tool_name}"
+
+            try:
+                result = tool_map[tool_name].invoke(args)
+                return (
+                    f"[Step {step.get('id', '?')}] {tool_name}({args})\n"
+                    f"Reason: {reason}\n"
+                    f"Result:\n{result}"
+                )
+            except Exception as exc:
+                logger.warning("parallel_gather step %s failed: %s", step.get("id"), exc)
+                return (
+                    f"[Step {step.get('id', '?')}] {tool_name} FAILED: {exc}"
+                )
+
+        # Execute independent steps concurrently
+        results = []
+        if independent:
+            with ThreadPoolExecutor(max_workers=min(len(independent), 4)) as executor:
+                futures = {
+                    executor.submit(_run_step, step): step
+                    for step in independent
+                }
+                for future in as_completed(futures):
+                    results.append(future.result())
+
+        # Sort by step id for consistent ordering
+        def _step_sort_key(r: str) -> int:
+            try:
+                # Format is "[Step N] ..." — extract N
+                inside = r.split("]")[0].split("[")[-1]  # "Step N" or "N"
+                return int(inside.split()[-1])
+            except (ValueError, IndexError):
+                return 0
+
+        results.sort(key=_step_sort_key)
+
+        gathered = "\n\n---\n\n".join(results)
+
+        # Note remaining dependent steps for the LLM
+        if dependent:
+            dep_note = "\n\nRemaining dependent steps (execute these in order):\n"
+            for s in dependent:
+                dep_note += f"  - Step {s['id']}: {s['tool']}({s.get('args', {})}) [depends on: {s['depends_on']}]\n"
+            gathered += dep_note
+
+        return {"gathered_context": gathered}
+
+
     # Tool execution node
     tool_node = ToolNode(tools)
     
@@ -688,12 +892,16 @@ Examples:
     # ============ ROUTING FUNCTIONS ============
     
     def route_based_on_type(state: AgentState):
-        """Route to simple or detailed handler based on query type."""
+        """Route to simple handler or planning node based on query type."""
         if state["query_type"] == "simple":
             return "simple_handler"
+        return "plan_query"  # detailed and research both go through planning
+
+    def route_after_plan(state: AgentState):
+        """After planning, research queries go to RAG first; all go through parallel gather."""
         if state["query_type"] == "research":
             return "rag_handler"
-        return "detailed_handler"
+        return "parallel_gather"
     
     
     def should_continue(state: AgentState):
@@ -718,27 +926,41 @@ Examples:
     
     # Add nodes
     workflow.add_node("route_query", route_query)
+    workflow.add_node("plan_query", plan_query)
+    workflow.add_node("parallel_gather", parallel_gather)
     workflow.add_node("simple_handler", simple_handler)
     workflow.add_node("rag_handler", rag_handler)
     workflow.add_node("detailed_handler", detailed_handler)
     workflow.add_node("tools", tool_node)
-    
+
     # Define edges
     workflow.add_edge(START, "route_query")
-    
-    # Route to appropriate handler after classification
+
+    # Route: simple goes direct, detailed/research go through planner
     workflow.add_conditional_edges(
         "route_query",
         route_based_on_type,
         {
             "simple_handler": "simple_handler",
-            "rag_handler": "rag_handler",
-            "detailed_handler": "detailed_handler"
+            "plan_query": "plan_query",
         }
     )
 
-    # Research path: retrieve papers then proceed to detailed handler
-    workflow.add_edge("rag_handler", "detailed_handler")
+    # After planning: research → RAG first, detailed → parallel gather
+    workflow.add_conditional_edges(
+        "plan_query",
+        route_after_plan,
+        {
+            "rag_handler": "rag_handler",
+            "parallel_gather": "parallel_gather",
+        }
+    )
+
+    # Research path: RAG → parallel gather → detailed handler
+    workflow.add_edge("rag_handler", "parallel_gather")
+
+    # Parallel gather always flows to detailed handler
+    workflow.add_edge("parallel_gather", "detailed_handler")
     
     # Both handlers may need to call tools
     workflow.add_conditional_edges("simple_handler", should_continue)
@@ -803,6 +1025,8 @@ def run_agent_sync(agent, query: str) -> dict:
         "query_type": "",
         "needs_rag": False,
         "rag_context": "",
+        "plan": "",
+        "gathered_context": "",
     }
     
     # Execute agent
@@ -817,6 +1041,45 @@ def run_agent_sync(agent, query: str) -> dict:
         "message_count": len(final_state["messages"]),
         "full_state": final_state
     }
+
+
+def make_embed_fn(embedding_service_url: str | None = None):
+    """
+    Create an embedding function that calls the embedding microservice.
+
+    Returns None if the service URL is not configured, so the query cache
+    falls back to exact-match only (no semantic similarity).
+    """
+    import requests
+    url = embedding_service_url or os.getenv("EMBEDDING_SERVICE_URL", "")
+    if not url:
+        return None
+
+    def _embed(text: str) -> list[float]:
+        resp = requests.post(url, json={"text": [text]}, timeout=10)
+        resp.raise_for_status()
+        return resp.json()["embeddings"][0]
+
+    return _embed
+
+
+def check_query_cache(query: str) -> tuple[str, str] | None:
+    """
+    Check if a semantically similar query has a cached response.
+
+    Returns (response_text, query_type) or None.
+    Best-effort: returns None if Redis is down or embedding service unavailable.
+    """
+    embed_fn = make_embed_fn()
+    qcache = get_query_cache(embed_fn)
+    return qcache.lookup(query)
+
+
+def store_query_cache(query: str, query_type: str, response: str, tools_used: list[str] | None = None):
+    """Store a query response in the cache for future reuse."""
+    embed_fn = make_embed_fn()
+    qcache = get_query_cache(embed_fn)
+    qcache.store(query, query_type, response, tools_used)
 
 
 # ============================================

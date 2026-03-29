@@ -480,6 +480,97 @@ def get_cache() -> RedisCache:
     return _cache
 
 
+class QueryCacheLayer:
+    """
+    High-level interface for query-response caching.
+
+    Combines exact-match lookup with cosine-similarity fallback.
+    Requires an embedding function to compute query embeddings.
+    """
+
+    def __init__(self, embed_fn: Callable[[str], list[float]] | None = None):
+        self._cache = get_cache()
+        self._embed_fn = embed_fn
+        self._index = QueryEmbeddingIndex(self._cache) if self._cache.connected else None
+
+    @property
+    def enabled(self) -> bool:
+        return self._cache.connected
+
+    def lookup(self, query: str) -> tuple[str, str] | None:
+        """
+        Check cache for a matching response.
+
+        Returns (response_text, query_type) or None.
+        Tries exact match first, then semantic similarity.
+        """
+        if not self._cache.connected:
+            return None
+
+        normalized = normalize_query(query)
+
+        # 1. Exact match
+        result = self._cache.get_query_exact(normalized)
+        if result is not None:
+            logger.info("Query cache HIT (exact): %s", normalized[:60])
+            return result
+
+        # 2. Similarity match (requires embedding function)
+        if self._embed_fn is not None and self._index is not None:
+            try:
+                embedding = self._embed_fn(normalized)
+                result = self._index.find_similar(embedding, threshold=0.95)
+                if result is not None:
+                    logger.info("Query cache HIT (similar): %s", normalized[:60])
+                    return result
+            except Exception as exc:
+                logger.warning("Similarity search failed: %s", exc)
+
+        return None
+
+    def store(
+        self,
+        query: str,
+        query_type: str,
+        response: str,
+        tools_used: list[str] | None = None,
+    ) -> None:
+        """Store a query response in the cache."""
+        if not self._cache.connected:
+            return
+
+        normalized = normalize_query(query)
+        ttl = QUERY_TTLS.get(query_type, 7 * 86400)
+
+        embedding: list[float] = []
+        if self._embed_fn is not None:
+            try:
+                embedding = self._embed_fn(normalized)
+            except Exception as exc:
+                logger.warning("Failed to compute embedding for cache: %s", exc)
+
+        self._cache.set_query_cache(
+            normalized=normalized,
+            embedding=embedding,
+            query_type=query_type,
+            response=response,
+            tools_used=tools_used or [],
+            ttl=ttl,
+        )
+        logger.info("Query cached (%s, ttl=%dd): %s", query_type, ttl // 86400, normalized[:60])
+
+
+_query_cache: QueryCacheLayer | None = None
+
+
+def get_query_cache(embed_fn: Callable[[str], list[float]] | None = None) -> QueryCacheLayer:
+    """Get or create the singleton QueryCacheLayer."""
+    global _query_cache
+    if _query_cache is None:
+        _query_cache = QueryCacheLayer(embed_fn)
+    return _query_cache
+
+
 def cached_tool_call(tool_name: str, result_fn: Callable[[], str], **kwargs) -> str:
     """
     Check Redis cache for a tool result. On miss, call result_fn() and store the result.

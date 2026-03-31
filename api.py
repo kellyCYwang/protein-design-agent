@@ -7,7 +7,6 @@ Run with:
 import asyncio
 import json
 import logging
-import os
 import threading
 from typing import AsyncGenerator, Optional
 
@@ -17,12 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agent.agent import build_agent
-from agent.cache import (
-    get_cache,
-    normalize_query,
-    QueryEmbeddingIndex,
-    QUERY_TTLS,
-)
+from agent.cache import get_cache, get_query_cache
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +36,7 @@ app.add_middleware(
 
 _agent = None
 _agent_lock = threading.Lock()
-_query_index: QueryEmbeddingIndex | None = None
+_query_cache_layer = None
 # Track active streams so they can be cancelled by thread_id
 _active_cancels: dict[str, threading.Event] = {}
 
@@ -56,11 +50,21 @@ def get_agent():
     return _agent
 
 
-def get_query_index() -> QueryEmbeddingIndex:
-    global _query_index
-    if _query_index is None:
-        _query_index = QueryEmbeddingIndex(get_cache())
-    return _query_index
+def _get_query_cache_layer():
+    """Get or create the singleton QueryCacheLayer with embedding support."""
+    global _query_cache_layer
+    if _query_cache_layer is None:
+        embed_fn = None
+        try:
+            from agent.rag.pdf_processing import get_embeddings
+
+            def embed_fn(text: str) -> list[float]:
+                result = get_embeddings([text])
+                return result[0] if result else []
+        except Exception:
+            pass
+        _query_cache_layer = get_query_cache(embed_fn)
+    return _query_cache_layer
 
 
 class ChatRequest(BaseModel):
@@ -84,59 +88,13 @@ def _try_query_cache(message: str) -> tuple[str, str] | None:
 
     Returns (response_text, query_type) or None.
     """
-    cache = get_cache()
-    if not cache.connected:
-        return None
-
-    normalized = normalize_query(message)
-
-    # Tier 1: exact match
-    result = cache.get_query_exact(normalized)
-    if result is not None:
-        logger.info("Query cache HIT (exact): %s", normalized[:80])
-        return result
-
-    # Tier 2: semantic similarity
-    try:
-        from agent.rag.pdf_processing import get_embeddings
-        threshold = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.95"))
-        embeddings = get_embeddings([message])
-        if embeddings and len(embeddings) > 0:
-            idx = get_query_index()
-            result = idx.find_similar(embeddings[0], threshold=threshold)
-            if result is not None:
-                logger.info("Query cache HIT (semantic): %s", normalized[:80])
-                return result
-    except Exception as exc:
-        # Embedding service may be down — skip semantic matching
-        logger.debug("Semantic cache check failed: %s", exc)
-
-    cache._r.incr(b"stats:query_misses")
-    return None
+    return _get_query_cache_layer().lookup(message)
 
 
 def _store_query_cache(message: str, query_type: str, response: str, tools_used: list[str]) -> None:
     """Store a completed response in the query cache (background, best-effort)."""
     try:
-        cache = get_cache()
-        if not cache.connected:
-            return
-        normalized = normalize_query(message)
-        ttl = QUERY_TTLS.get(query_type, QUERY_TTLS["detailed"])
-
-        # Get embedding for similarity matching
-        from agent.rag.pdf_processing import get_embeddings
-        embeddings = get_embeddings([message])
-        if embeddings and len(embeddings) > 0:
-            cache.set_query_cache(
-                normalized=normalized,
-                embedding=embeddings[0],
-                query_type=query_type,
-                response=response,
-                tools_used=tools_used,
-                ttl=ttl,
-            )
-            logger.info("Query cached: %s (type=%s, ttl=%ds)", normalized[:80], query_type, ttl)
+        _get_query_cache_layer().store(message, query_type, response, tools_used)
     except Exception as exc:
         logger.warning("Failed to cache query response: %s", exc)
 

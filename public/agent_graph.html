@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Orchestration Flow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 40px 20px;
+  }
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+    color: #f5f5f5;
+  }
+  .subtitle {
+    font-size: 0.85rem;
+    color: #888;
+    margin-bottom: 32px;
+  }
+  .legend {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: #aaa;
+  }
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+  }
+  .legend-dot.simple   { background: #6bc5a0; }
+  .legend-dot.plan     { background: #7ea8e4; }
+  .legend-dot.research { background: #c592e0; }
+  .legend-dot.shared   { background: #e8a86d; }
+  .legend-dot.terminal { background: #555; }
+
+  .graph-container {
+    background: #111118;
+    border: 1px solid #222;
+    border-radius: 16px;
+    padding: 48px 56px;
+    width: 100%;
+    max-width: 920px;
+  }
+  .graph-container svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+</style>
+</head>
+<body>
+
+<h1>Protein Design Agent &mdash; Orchestration Graph</h1>
+<p class="subtitle">LangGraph StateGraph with planning, parallel gather, and tool loops</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot simple"></div>Simple path</div>
+  <div class="legend-item"><div class="legend-dot plan"></div>Detailed path</div>
+  <div class="legend-item"><div class="legend-dot research"></div>Research path</div>
+  <div class="legend-item"><div class="legend-dot shared"></div>Shared nodes</div>
+  <div class="legend-item"><div class="legend-dot terminal"></div>Terminal</div>
+</div>
+
+<div class="graph-container">
+  <svg width="820" height="700" viewBox="0 0 820 700" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 7" refX="9" refY="3.5"
+              markerWidth="8" markerHeight="6" orient="auto">
+        <path d="M0,0 L10,3.5 L0,7z" fill="#666"/>
+      </marker>
+      <marker id="arr-g" viewBox="0 0 10 7" refX="9" refY="3.5"
+              markerWidth="8" markerHeight="6" orient="auto">
+        <path d="M0,0 L10,3.5 L0,7z" fill="#6bc5a0"/>
+      </marker>
+      <marker id="arr-b" viewBox="0 0 10 7" refX="9" refY="3.5"
+              markerWidth="8" markerHeight="6" orient="auto">
+        <path d="M0,0 L10,3.5 L0,7z" fill="#7ea8e4"/>
+      </marker>
+      <marker id="arr-p" viewBox="0 0 10 7" refX="9" refY="3.5"
+              markerWidth="8" markerHeight="6" orient="auto">
+        <path d="M0,0 L10,3.5 L0,7z" fill="#c592e0"/>
+      </marker>
+      <marker id="arr-o" viewBox="0 0 10 7" refX="9" refY="3.5"
+              markerWidth="8" markerHeight="6" orient="auto">
+        <path d="M0,0 L10,3.5 L0,7z" fill="#e8a86d"/>
+      </marker>
+    </defs>
+
+    <!-- ======== EDGES (drawn first, nodes overlay) ======== -->
+
+    <!-- START -> route_query -->
+    <line x1="410" y1="42" x2="410" y2="78" stroke="#666" stroke-width="1.8" marker-end="url(#arr)"/>
+
+    <!-- route_query -> simple_handler (simple) -->
+    <path d="M330,95 C260,95 200,95 200,150 L200,198"
+          fill="none" stroke="#6bc5a0" stroke-width="1.8" marker-end="url(#arr-g)"/>
+    <text x="228" y="152" fill="#6bc5a0" font-size="10" font-family="sans-serif" opacity="0.85">simple</text>
+
+    <!-- route_query -> plan_query (detailed / research) -->
+    <path d="M490,95 C530,95 560,95 560,150 L560,198"
+          fill="none" stroke="#7ea8e4" stroke-width="1.8" marker-end="url(#arr-b)"/>
+    <text x="498" y="152" fill="#7ea8e4" font-size="10" font-family="sans-serif" opacity="0.85">detailed / research</text>
+
+    <!-- plan_query -> parallel_gather (detailed) -->
+    <path d="M520,232 C520,270 520,280 520,318"
+          fill="none" stroke="#7ea8e4" stroke-width="1.8" marker-end="url(#arr-b)"/>
+    <text x="528" y="280" fill="#7ea8e4" font-size="10" font-family="sans-serif" opacity="0.85">detailed</text>
+
+    <!-- plan_query -> rag_handler (research) -->
+    <path d="M640,232 C680,260 700,280 700,318"
+          fill="none" stroke="#c592e0" stroke-width="1.8" marker-end="url(#arr-p)"/>
+    <text x="668" y="272" fill="#c592e0" font-size="10" font-family="sans-serif" opacity="0.85">research</text>
+
+    <!-- rag_handler -> parallel_gather -->
+    <path d="M660,352 C640,380 620,390 600,370"
+          fill="none" stroke="#c592e0" stroke-width="1.8" marker-end="url(#arr-p)"/>
+
+    <!-- parallel_gather -> detailed_handler -->
+    <line x1="560" y1="370" x2="560" y2="440" stroke="#e8a86d" stroke-width="1.8" marker-end="url(#arr-o)"/>
+
+    <!-- simple_handler -> tools (down) -->
+    <line x1="210" y1="232" x2="210" y2="318" stroke="#6bc5a0" stroke-width="1.8" marker-end="url(#arr-g)"/>
+    <!-- tools -> simple_handler (up, dashed) -->
+    <line x1="180" y1="318" x2="180" y2="232" stroke="#6bc5a0" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#arr-g)"/>
+    <text x="132" y="280" fill="#6bc5a0" font-size="9" font-family="sans-serif" opacity="0.7">tool loop</text>
+
+    <!-- detailed_handler -> tools (down) -->
+    <line x1="570" y1="498" x2="570" y2="548" stroke="#e8a86d" stroke-width="1.8" marker-end="url(#arr-o)"/>
+    <!-- tools -> detailed_handler (up, dashed) -->
+    <line x1="540" y1="548" x2="540" y2="498" stroke="#e8a86d" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#arr-o)"/>
+    <text x="492" y="528" fill="#e8a86d" font-size="9" font-family="sans-serif" opacity="0.7">tool loop</text>
+
+    <!-- simple_handler -> END (done) -->
+    <path d="M200,352 L200,630 C200,645 210,650 225,650 L396,650"
+          fill="none" stroke="#6bc5a0" stroke-width="1.8" marker-end="url(#arr-g)"/>
+    <text x="230" y="644" fill="#6bc5a0" font-size="9" font-family="sans-serif" opacity="0.7">done</text>
+
+    <!-- detailed_handler -> END (done) -->
+    <path d="M560,582 L560,630 C560,645 550,650 535,650 L424,650"
+          fill="none" stroke="#e8a86d" stroke-width="1.8" marker-end="url(#arr-o)"/>
+    <text x="468" y="644" fill="#e8a86d" font-size="9" font-family="sans-serif" opacity="0.7">done</text>
+
+    <!-- ======== NODES ======== -->
+
+    <!-- START -->
+    <circle cx="410" cy="28" r="14" fill="#1a1a25" stroke="#555" stroke-width="2"/>
+    <circle cx="410" cy="28" r="5" fill="#888"/>
+    <text x="432" y="33" fill="#888" font-size="11" font-family="sans-serif">START</text>
+
+    <!-- route_query -->
+    <rect x="330" y="78" width="160" height="34" rx="8" fill="#1a1a25" stroke="#e8a86d" stroke-width="1.5"/>
+    <text x="410" y="100" text-anchor="middle" fill="#f0f0f0" font-size="13" font-family="monospace">route_query</text>
+
+    <!-- simple_handler -->
+    <rect x="115" y="198" width="170" height="34" rx="8" fill="#1a1a25" stroke="#6bc5a0" stroke-width="1.5"/>
+    <text x="200" y="220" text-anchor="middle" fill="#f0f0f0" font-size="13" font-family="monospace">simple_handler</text>
+
+    <!-- tools (simple) -->
+    <rect x="130" y="318" width="140" height="34" rx="8" fill="#1a1a25" stroke="#6bc5a0" stroke-width="1"/>
+    <text x="200" y="340" text-anchor="middle" fill="#bbb" font-size="12" font-family="monospace">tools</text>
+
+    <!-- plan_query -->
+    <rect x="480" y="198" width="160" height="34" rx="8" fill="#1a1a25" stroke="#7ea8e4" stroke-width="1.5"/>
+    <text x="560" y="220" text-anchor="middle" fill="#f0f0f0" font-size="13" font-family="monospace">plan_query</text>
+
+    <!-- parallel_gather (hexagon) -->
+    <polygon points="480,345 508,318 612,318 640,345 612,372 508,372"
+             fill="#1a1a25" stroke="#7ea8e4" stroke-width="1.5"/>
+    <text x="560" y="350" text-anchor="middle" fill="#f0f0f0" font-size="12" font-family="monospace">parallel_gather</text>
+
+    <!-- rag_handler -->
+    <rect x="630" y="318" width="140" height="34" rx="8" fill="#1a1a25" stroke="#c592e0" stroke-width="1.5"/>
+    <text x="700" y="340" text-anchor="middle" fill="#f0f0f0" font-size="13" font-family="monospace">rag_handler</text>
+
+    <!-- detailed_handler -->
+    <rect x="480" y="444" width="160" height="54" rx="8" fill="#1a1a25" stroke="#e8a86d" stroke-width="1.5"/>
+    <text x="560" y="468" text-anchor="middle" fill="#f0f0f0" font-size="13" font-family="monospace">detailed_handler</text>
+    <text x="560" y="486" text-anchor="middle" fill="#888" font-size="10" font-family="sans-serif">+ skill injection</text>
+
+    <!-- tools (detailed) -->
+    <rect x="490" y="548" width="140" height="34" rx="8" fill="#1a1a25" stroke="#e8a86d" stroke-width="1"/>
+    <text x="560" y="570" text-anchor="middle" fill="#bbb" font-size="12" font-family="monospace">tools</text>
+
+    <!-- END -->
+    <circle cx="410" cy="650" r="14" fill="#1a1a25" stroke="#555" stroke-width="2"/>
+    <circle cx="410" cy="650" r="10" fill="none" stroke="#555" stroke-width="1.5"/>
+    <circle cx="410" cy="650" r="4" fill="#888"/>
+
+    <!-- ======== PATH SUMMARY BOXES ======== -->
+
+    <rect x="30" y="430" width="210" height="56" rx="8" fill="#0d0d14" stroke="#6bc5a044" stroke-width="1"/>
+    <text x="135" y="449" text-anchor="middle" fill="#6bc5a0" font-size="10" font-weight="bold" font-family="sans-serif">SIMPLE PATH</text>
+    <text x="135" y="465" text-anchor="middle" fill="#888" font-size="9" font-family="sans-serif">route &#8594; simple_handler</text>
+    <text x="135" y="478" text-anchor="middle" fill="#888" font-size="9" font-family="sans-serif">&#8596; tools &#8594; END</text>
+
+    <rect x="30" y="500" width="210" height="56" rx="8" fill="#0d0d14" stroke="#7ea8e444" stroke-width="1"/>
+    <text x="135" y="519" text-anchor="middle" fill="#7ea8e4" font-size="10" font-weight="bold" font-family="sans-serif">DETAILED PATH</text>
+    <text x="135" y="535" text-anchor="middle" fill="#888" font-size="9" font-family="sans-serif">route &#8594; plan &#8594; gather</text>
+    <text x="135" y="548" text-anchor="middle" fill="#888" font-size="9" font-family="sans-serif">&#8594; detailed_handler &#8596; tools &#8594; END</text>
+
+    <rect x="30" y="570" width="210" height="56" rx="8" fill="#0d0d14" stroke="#c592e044" stroke-width="1"/>
+    <text x="135" y="589" text-anchor="middle" fill="#c592e0" font-size="10" font-weight="bold" font-family="sans-serif">RESEARCH PATH</text>
+    <text x="135" y="605" text-anchor="middle" fill="#888" font-size="9" font-family="sans-serif">route &#8594; plan &#8594; rag &#8594; gather</text>
+    <text x="135" y="618" text-anchor="middle" fill="#888" font-size="9" font-family="sans-serif">&#8594; detailed_handler &#8596; tools &#8594; END</text>
+
+  </svg>
+</div>
+
+</body>
+</html>

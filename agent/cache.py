@@ -492,6 +492,7 @@ class QueryCacheLayer:
         self._cache = get_cache()
         self._embed_fn = embed_fn
         self._index = QueryEmbeddingIndex(self._cache) if self._cache.connected else None
+        self._threshold = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.90"))
 
     @property
     def enabled(self) -> bool:
@@ -519,7 +520,7 @@ class QueryCacheLayer:
         if self._embed_fn is not None and self._index is not None:
             try:
                 embedding = self._embed_fn(normalized)
-                result = self._index.find_similar(embedding, threshold=0.95)
+                result = self._index.find_similar(embedding, threshold=self._threshold)
                 if result is not None:
                     logger.info("Query cache HIT (similar): %s", normalized[:60])
                     return result

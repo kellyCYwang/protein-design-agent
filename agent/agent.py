@@ -365,37 +365,43 @@ def load_skill_content(file_path: str) -> str:
 
 def _build_skill_registry() -> dict[str, dict]:
     """
-    Auto-discover all .md files in the skills/ directory and build a registry.
-    
-    Each skill gets:
-      - name: derived from filename (e.g. "EnzymeAnalysis.md" -> "enzyme_analysis")
-      - content: the full markdown text
-      - description: first non-empty, non-heading line from the file (used by the router)
-    
+    Auto-discover skills in the skills/ directory.
+
+    Expected layout:
+        skills/
+        ├── enzyme_analysis/
+        │   └── SKILL.md
+        └── another_skill/
+            └── SKILL.md
+
+    The directory name is the skill key. SKILL.md contains the full
+    markdown content injected as a system prompt.
+
     Returns:
         Dict mapping skill_name -> {"content": str, "description": str, "file": str}
     """
     skills_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
     registry: dict[str, dict] = {}
-    
+
     if not os.path.isdir(skills_dir):
         print(f"Warning: skills directory not found at {skills_dir}")
         return registry
-    
-    for filename in sorted(os.listdir(skills_dir)):
-        if not filename.endswith(".md"):
+
+    for entry in sorted(os.listdir(skills_dir)):
+        entry_path = os.path.join(skills_dir, entry)
+        if not os.path.isdir(entry_path):
             continue
-        
-        # Derive a snake_case key from the filename: "EnzymeAnalysis.md" -> "enzyme_analysis"
-        raw_name = filename.removesuffix(".md")
-        # Insert underscore before uppercase letters, then lowercase
-        import re as _re
-        skill_name = _re.sub(r'(?<=[a-z0-9])([A-Z])', r'_\1', raw_name).lower()
-        
-        content = load_skill_content(os.path.join(skills_dir, filename))
+
+        skill_file = os.path.join(entry_path, "SKILL.md")
+        if not os.path.isfile(skill_file):
+            continue
+
+        skill_name = entry  # directory name is the key
+
+        content = load_skill_content(skill_file)
         if not content:
             continue
-        
+
         # Extract a short description: first non-blank, non-heading line
         description = ""
         for line in content.splitlines():
@@ -404,15 +410,15 @@ def _build_skill_registry() -> dict[str, dict]:
                 description = stripped[:120]
                 break
         if not description:
-            description = f"Skill loaded from {filename}"
-        
+            description = f"Skill loaded from {entry}/SKILL.md"
+
         registry[skill_name] = {
             "content": content,
             "description": description,
-            "file": filename,
+            "file": f"{entry}/SKILL.md",
         }
-        print(f"  Registered skill: {skill_name} ({filename})")
-    
+        print(f"  Registered skill: {skill_name} ({entry}/SKILL.md)")
+
     return registry
 
 

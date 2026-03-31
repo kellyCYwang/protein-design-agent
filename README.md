@@ -35,7 +35,7 @@ Modular servers in `mcp_servers/` each expose search/lookup methods:
 | `biorxiv/` | EuropePMC REST |
 
 ### Skill System
-Drop a Markdown file into `agent/skills/` and the router automatically gains the ability to select it. The file's content is injected as a system prompt for the detailed handler -- no code changes needed.
+Create a subdirectory in `agent/skills/` with a `SKILL.md` file (e.g., `agent/skills/enzyme_analysis/SKILL.md`) and the router automatically gains the ability to select it. The directory name is the skill key. The file's content is injected as a system prompt for the detailed handler -- no code changes needed.
 
 ### React Frontend
 A custom React/TypeScript/Vite UI served through a FastAPI SSE streaming backend.
@@ -62,6 +62,8 @@ Two-tier caching system that speeds up repeated and similar queries:
 ---
 
 ## Agent Graph
+
+[View interactive graph](public/agent_graph.html)
 
 ```
 Simple:   START -> route_query -> simple_handler <-> tools -> END
@@ -105,7 +107,7 @@ protein-design-agent/
 ├── agent/
 │   ├── agent.py              # LangGraph StateGraph + planning + parallel gather
 │   ├── cache.py              # Redis caching (tool results + query-level dedup)
-│   ├── skills/               # Markdown skill files (auto-discovered)
+│   ├── skills/               # {skill_name}/SKILL.md (auto-discovered)
 │   └── rag/
 │       ├── chroma_rag.py
 │       ├── pinecone_rag.py

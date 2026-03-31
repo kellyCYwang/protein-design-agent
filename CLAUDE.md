@@ -104,7 +104,7 @@ Each subdirectory (`ec/`, `pdb/`, `uniprot/`, `arxiv/`, `biorxiv/`) contains a `
 
 ### Skill System (`agent/skills/`)
 
-Skills are **Markdown files** in `agent/skills/`. At import time, `_build_skill_registry()` auto-discovers all `.md` files and derives snake_case keys (e.g., `EnzymeAnalysis.md` → `enzyme_analysis`). When the router selects a skill, its full Markdown content is injected as a `SystemMessage` into `detailed_handler`. Add new skills by dropping `.md` files in that directory — no code changes needed.
+Skills live in `agent/skills/{skill_name}/SKILL.md`. At import time, `_build_skill_registry()` scans subdirectories for `SKILL.md` files. The directory name is the skill key (e.g., `enzyme_analysis/SKILL.md` → key `enzyme_analysis`). When the router selects a skill, its full Markdown content is injected as a `SystemMessage` into `detailed_handler`. Add new skills by creating a new subdirectory with a `SKILL.md` file — no code changes needed.
 
 ### FastAPI Backend (`api.py`)
 
